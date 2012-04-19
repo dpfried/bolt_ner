@@ -71,12 +71,6 @@ the full specification."
        (= (length (intersection none-of lst)) 0)))
 
 ;;;; hash-table utilities
-(set-pprint-dispatch 'hash-table
- (lambda (str ht)
-  (format str "{~{~{~S => ~S~}~^, ~}}"
-   (loop for key being the hash-keys of ht
-         for value being the hash-values of ht
-         collect (list key value)))))
 
 (defun hash-table->alist (ht)
   (let (alist)
@@ -103,6 +97,13 @@ the full specification."
 
 (defun sort-ht-descending (ht)
   (sort-alist-descending (hash-table->alist ht)))
+
+(set-pprint-dispatch 'hash-table
+  (lambda (str ht)
+    (format str "{~{~{~S => ~S~}~^ ~}}"
+	    (mapcar #'(lambda (assoc-pair)
+			(list (car assoc-pair) (cdr assoc-pair)))
+		    (sort-ht-descending ht)))))
 
 (defun merge-hash-tables (&rest tables)
   "http://pleac.sourceforge.net/pleac_commonlisp/hashes.html"
@@ -254,11 +255,10 @@ the full specification."
   (let ((size-of-feature-domain (hash-table-count 
 				 (apply #'merge-hash-tables 
 					(mapcar #'nbc-class-distribution classes)))))
-    
     (argmax classes #'(lambda (class) (nbc-score feature-bag 
-					 (nbc-class-distribution class) 
-					 (nbc-class-prior class) 
-					 size-of-feature-domain)))))
+						 (nbc-class-distribution class) 
+						 (nbc-class-prior class) 
+						 size-of-feature-domain)))))
 
 
 ;;;; in progress
@@ -268,7 +268,7 @@ the full specification."
   (if (listp sexp)
       (if (and (eq (car sexp) 'np)
 	       (not (has-internal-node? sexp 'np T)))
-	  (cons (car sexp) (list (nbc-class-label (nbc-classify (words sexp)
+	  (cons (car sexp) (list (nbc-class-label (nbc-classify (words-from-tree sexp)
 							  classes))))
 	  (cons (car sexp) (mapcar #'(lambda (s) (apply #'identify-nouns s classes)) (cdr sexp))))
       sexp))
@@ -363,21 +363,29 @@ the full specification."
     (13 3)
     (14 8)))
 
-(defun all-objects-all-scenes (&optional (class-fn #'scene-class-innermost-noun-phrases))
+(defun classes-all-objects-all-scenes (&optional (class-fn #'scene-class-innermost-noun-phrases))
   (mapcan #'(lambda (sequence-index)
 	      (let ((seq-len (sequence-length sequence-index)))
 		(mapcar #'(lambda (scene-index)
 			    (funcall #'object-class-features sequence-index scene-index
 								 (1- seq-len)
 								 :class-fn class-fn
-								 :label (list sequence-index scene-index)
-								 :prior (/ (- seq-len scene-index)
-									   seq-len)))
+								 :label (format nil "~A ~A" sequence-index scene-index)
+								 ;:prior (/ (- seq-len scene-index) seq-len)))
+								 :prior 1))
+			(range 0 (1- seq-len)))))
+	  (range 1 14)))
+
+(defun classes-subject-isolation ()
+  (mapcan #'(lambda (sequence-index)
+	      (let ((seq-len (sequence-length sequence-index)))
+		(mapcar #'(lambda (scene-index)
+			    (scene-class-subject-noun-phrases (scene-lfs sequence-index scene-index)
+							      :label (format nil "~A ~A" sequence-index scene-index)
+							      :prior 1))
 			(range 0 (1- seq-len)))))
 	  (range 1 14)))
 
 
-
-
-    
-	    
+(defun identify-nouns-in-parse-forest (parse-forest &rest classes)
+  (mapcar #'(lambda (pt) (apply #'identify-nouns pt classes)) parse-forest))
