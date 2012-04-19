@@ -367,25 +367,57 @@ the full specification."
   (mapcan #'(lambda (sequence-index)
 	      (let ((seq-len (sequence-length sequence-index)))
 		(mapcar #'(lambda (scene-index)
+			    (let ((class 
 			    (funcall #'object-class-features sequence-index scene-index
 								 (1- seq-len)
 								 :class-fn class-fn
 								 :label (format nil "~A ~A" sequence-index scene-index)
 								 ;:prior (/ (- seq-len scene-index) seq-len)))
-								 :prior 1))
+								 :prior 1)))
+;			      (setf (nbc-class-label class)(format nil "~A" (most-common-features-class class)))
+			      class))
 			(range 0 (1- seq-len)))))
 	  (range 1 14)))
 
-(defun classes-subject-isolation ()
+(defun classes-subject-isolation-all ()
   (mapcan #'(lambda (sequence-index)
 	      (let ((seq-len (sequence-length sequence-index)))
 		(mapcar #'(lambda (scene-index)
+			    (let ((class
 			    (scene-class-subject-noun-phrases (scene-lfs sequence-index scene-index)
-							      :label (format nil "~A ~A" sequence-index scene-index)
-							      :prior 1))
+							      :prior 1)))
+			      (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
+								       class)))
+			      class))
 			(range 0 (1- seq-len)))))
 	  (range 1 14)))
+
+(defun classes-subject-isolation-sequence (sequence-index &optional end-scene)
+  (let ((last-scene (or end-scene (1- (sequence-length sequence-index)))))
+    (cons (scene-class-all-words (ground-lfs) :label "(GROUND)"
+				  :prior 1)
+    (mapcar #'(lambda (scene-index)
+		(let ((class
+		       (scene-class-subject-noun-phrases (scene-lfs sequence-index scene-index)
+							 :prior 1)))
+		  (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
+								 class)))
+		  class))
+	    (range 0 last-scene)))))
+
+
+(defun most-common-features-class (class &optional (n 3))
+  (reverse (mapcar #'car (last (reverse (sort-ht-descending (nbc-class-distribution class))) n))))
 
 
 (defun identify-nouns-in-parse-forest (parse-forest &rest classes)
   (mapcar #'(lambda (pt) (apply #'identify-nouns pt classes)) parse-forest))
+
+(defun foo-all-objects-all-scenes (sequence-index scene-index &optional (class-fn #'scene-class-innermost-noun-phrases))
+  (let ((classes (classes-all-objects-all-scenes class-fn)))
+    (mapcar #'words-from-tree (apply #'identify-nouns-in-parse-forest (scene-parse-forest (scene-lfs sequence-index scene-index))
+				     classes))))
+
+(defun foo-subject-isolation (sequence-index scene-index)
+  (mapcar #'words-from-tree (apply #'identify-nouns-in-parse-forest (scene-parse-forest (scene-lfs sequence-index scene-index))
+				   (classes-subject-isolation-sequence sequence-index scene-index))))
