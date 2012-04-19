@@ -36,11 +36,12 @@
 (defun comparator (test &optional (key #'identity))
   "Comparison operator: auxilliary function used by EXTREMUM"
   (declare (optimize (speed 3) (safety 0) (space 0) (debug 1)))
-  (lambda (a b) (if (funcall test
-                             (funcall key a)
-                             (funcall key b))
-                    a
-                    b)))
+  (lambda (a b) 
+    (let ((f_a (funcall key a))
+	  (f_b (funcall key b)))
+      (if (funcall test f_a f_b)
+	  (values a f_a)
+	  (values b f_b)))))
 
 (defun extremum (sequence predicate
 		  &key (key #'identity) (start 0) end)
@@ -51,8 +52,18 @@ the full specification."
     (reduce (comparator predicate key) sequence
 	        :start start :end end))
 
+;(defun argmax (lst key)
+;  (extremum lst #'> :key key))
+
 (defun argmax (lst key)
-  (extremum lst #'> :key key))
+  (let (max-item max-val)
+    (dolist (x lst)
+      (if (or (not max-val)
+	      (> (funcall key x) max-val))
+	  (setf max-item x
+		max-val (funcall key x))))
+    (values max-item max-val)))
+    
 
 (defun inclusion-exclusion? (lst one-of none-of)
   "return true iff the lst contain all the atoms in one-of and none of the atoms in none-of"
@@ -158,7 +169,7 @@ the full specification."
   "get a list of all children of the parent-node in the tree. will match multiple if the parent-node appears multiple times"
   (if (listp tree)
       (if (eq (car tree) parent-node)
-	  (cons (cdr tree) (mapcan #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))p
+	  (cons (cdr tree) (mapcan #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))
 	  (mapcan #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))))
 
 (defun ancestor-list (tree &optional ancestors)
@@ -166,6 +177,14 @@ the full specification."
   (if (atom tree)
       (list (cons tree (list ancestors)))
       (mapcan #'(lambda (s) (ancestor-list s (cons (car tree) ancestors))) (cdr tree))))
+
+(defun has-internal-node? (tree node &optional exclude-root)
+  (if exclude-root
+      (some #'(lambda (s) (has-internal-node? s node)) (cdr tree))
+      (if (listp tree)
+	  (or (eq (car tree) node)
+	      (some #'(lambda (s) (has-internal-node? s node)) (cdr tree))))))
+
 
 ;;;; parse-tree specific
 (defun words (parse-tree)
@@ -201,6 +220,12 @@ the full specification."
   prior ; a number, the prior probability
 )
 
+(defun nbc-class-from-feature-bag (feature-bag &key label (prior 1))
+  (make-nbc-class :distribution (frequencies feature-bag)
+		  :prior prior
+		  :label (or label feature-bag)))
+
+
 (defun nbc-score (feature-bag class-distribution class-prior size-of-feature-domain)
   "get the nbc score for a bag of features and the distribution for a given class
    feature-bag -- a list of features present in the instance we're classifying
@@ -219,21 +244,21 @@ the full specification."
   (let ((size-of-feature-domain (hash-table-count 
 				 (apply #'merge-hash-tables 
 					(mapcar #'nbc-class-distribution classes)))))
-
-    (argmax #'(lambda (class) (nbc-score feature-bag 
+    
+    (argmax classes #'(lambda (class) (nbc-score feature-bag 
 					 (nbc-class-distribution class) 
 					 (nbc-class-prior class) 
-					 size-of-feature-domain))
-	    classes)))
+					 size-of-feature-domain)))))
 
 
-	    
+;;;; in progress
+(defun identify-nouns (sexp classes)
+  (if (listp sexp)
+      (if (and (eq (car sexp) 'np)
+	       (not (has-internal-node? sexp 'np T)))
+	  (cons (car sexp) (list (nbc-class-label (nbc-classify (words sexp)
+							  classes))))
+	  (cons (car sexp) (mapcar #'(lambda (s) (identify-nouns s classes)) (cdr sexp))))
+      sexp))
 
-  
-  
 
-
-
-
-  
-    
