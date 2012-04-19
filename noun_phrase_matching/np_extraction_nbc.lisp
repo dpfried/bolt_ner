@@ -60,7 +60,7 @@ the full specification."
     (dolist (x lst)
       (if (or (not max-val)
 	      (> (funcall key x) max-val))
-	  (setf max-item xpp
+	  (setf max-item x
 		max-val (funcall key x))))
     (values max-item max-val)))
     
@@ -286,15 +286,30 @@ the full specification."
   (let ((word-bag (words-from-forest (mapcan #'scene-parse-forest scene-lfs-list))))
     (apply #'nbc-class-from-feature-bag word-bag key-args)))
 
-(defun scene-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
+(defun scene-class-all-noun-phrases (scene-lfs &rest key-args &key label prior)
   label ; ignore, passed to class constructor through key-args
   prior ; ignore, passed to class constructor through key-args
-  (let* ((parse-forest 
-	 (word-bag (words-from-forest (cdr scene-lfs))))
+  (let* ((np-list (mapcan #'get-nps (scene-parse-forest scene-lfs)))
+	 (word-bag (mapcan #'words-from-forest np-list)))
     (apply #'nbc-class-from-feature-bag word-bag key-args)))
 
-(defun scenes-class-all-words (scene-lfs-list &rest key-args &key label prior)
+(defun scenes-class-all-noun-phrases (scene-lfs-list &rest key-args &key label prior)
   label ; ignore, passed to class constructor through key-args
   prior ; ignore, passed to class constructor through key-args
-  (let ((word-bag (mapcan #'words (mapcan #'cdr scene-lfs-list))))
+  (let* ((np-list (mapcan #'get-nps (mapcan #'scene-parse-forest scene-lfs-list)))
+	(word-bag (mapcan #'words-from-forest np-list)))
+    (apply #'nbc-class-from-feature-bag word-bag key-args)))
+
+(defun scene-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
+  label ; ignore, passed to class constructor through key-args
+  prior ; ignore, passed to class constructor through key-arrgs
+  (let* ((np-list (mapcan #'get-innermost-nps (scene-parse-forest scene-lfs)))
+	 (word-bag (mapcan #'words-from-forest np-list)))
+    (apply #'nbc-class-from-feature-bag word-bag key-args)))
+
+(defun scenes-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
+  label ; ignore, passed to class constructor through key-args
+  prior ; ignore, passed to class constructor through key-arrgs
+  (let* ((np-list (mapcan #'get-innermost-nps (mapcan #'scene-parse-forest scene-lfs)))
+	 (word-bag (mapcan #'words-from-forest np-list)))
     (apply #'nbc-class-from-feature-bag word-bag key-args)))
