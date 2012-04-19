@@ -16,7 +16,7 @@
 	(let* ((responses (cdr response-list))
 	       (nps (mapcan #'get-nps responses))
 	       (innermost-nps (remove-if #'(lambda (sexps) (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) nps))
-	       (word-list (mapcar #'(lambda (sexps) (mapcan #'words sexps)) innermost-nps)))
+	       (word-list (mapcar #'(lambda (sexps) (words-from-forest sexps)) innermost-nps)))
 	  (print "new set")
 	  (print "nps")
 	  (print nps)
@@ -60,7 +60,7 @@ the full specification."
     (dolist (x lst)
       (if (or (not max-val)
 	      (> (funcall key x) max-val))
-	  (setf max-item x
+	  (setf max-item xpp
 		max-val (funcall key x))))
     (values max-item max-val)))
     
@@ -187,12 +187,22 @@ the full specification."
 
 
 ;;;; parse-tree specific
-(defun words (parse-tree)
+(defun words-from-tree (parse-tree)
   (leaves parse-tree))
+
+(defun words-from-forest (parse-trees)
+  (mapcan #'words-from-tree parse-trees))
 
 (defun get-nps (parse-tree)
   "list of sub-trees within any noun-phrase in the parse-tree"
   (find-children parse-tree 'np))
+
+(defun get-innermost-nps (parse-tree)
+  "list of sub-trees within any innermost noun-phrase in the parse-tree"
+  (remove-if #'(lambda (sexps) 
+		 (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) 
+	     (get-nps parse-tree)))
+
 
 ;;;; noun-phrase filtering
 (defun words-in-subject-filter (parse-tree)
@@ -261,4 +271,30 @@ the full specification."
 	  (cons (car sexp) (mapcar #'(lambda (s) (identify-nouns s classes)) (cdr sexp))))
       sexp))
 
+(defun scene-parse-forest (scene-lfs)
+  (mapcan #'cdr scene-lfs))
 
+(defun scene-class-all-words (scene-lfs &rest key-args &key label prior)
+  label ; ignore, passed to class constructor through key-args
+  prior ; ignore, passed to class constructor through key-args
+  (let ((word-bag (words-from-forest (scene-parse-forest scene-lfs))))
+    (apply #'nbc-class-from-feature-bag word-bag key-args)))
+
+(defun scenes-class-all-words (scene-lfs-list &rest key-args &key label prior)
+  label ; ignore, passed to class constructor through key-args
+  prior ; ignore, passed to class constructor through key-args
+  (let ((word-bag (words-from-forest (mapcan #'scene-parse-forest scene-lfs-list))))
+    (apply #'nbc-class-from-feature-bag word-bag key-args)))
+
+(defun scene-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
+  label ; ignore, passed to class constructor through key-args
+  prior ; ignore, passed to class constructor through key-args
+  (let* ((parse-forest 
+	 (word-bag (words-from-forest (cdr scene-lfs))))
+    (apply #'nbc-class-from-feature-bag word-bag key-args)))
+
+(defun scenes-class-all-words (scene-lfs-list &rest key-args &key label prior)
+  label ; ignore, passed to class constructor through key-args
+  prior ; ignore, passed to class constructor through key-args
+  (let ((word-bag (mapcan #'words (mapcan #'cdr scene-lfs-list))))
+    (apply #'nbc-class-from-feature-bag word-bag key-args)))
