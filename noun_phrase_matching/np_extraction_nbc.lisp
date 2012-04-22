@@ -8,6 +8,29 @@
   "load the logical forms from a given sequence and scene"
   (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename)))
 
+(defun read-scene-schematic (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "schematic.lisp"))
+  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
+    (read file nil)))
+
+(defun read-scene (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/"))
+  (make-scene 
+   :schematic (read-scene-schematic sequence-id scene-id base-path)
+   :response-list (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
+
+(defun camera (schematic)
+  (car schematic))
+
+(defun objects (schematic)
+  (cdr schematic))
+
+(defun last-object (schematic)
+  (car (last (objects schematic))))
+
+(defun object-shape (object)
+  (cdr (assoc 'type object)))
+
+(defun object-color (object)
+  (cdr (assoc 'color (cdr (assoc 'settings object)))))
 
 (defun export-nps (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "noun-phrases"))
   (let ((scene-lfs (scene-lfs sequence-id scene-id)))
@@ -405,7 +428,48 @@ the full specification."
 		  class))
 	    (range 0 last-scene)))))
 
+(defun partition (sequence &key (key #'identity) (equivalence-test #'eq) (transform #'identity))
+  (let (partitions)
+    (dolist (elem sequence)
+      (let* ((key (funcall key elem))
+	     (lookup (assoc key partitions :test equivalence-test)))
+	(if lookup
+	    (rplacd lookup (cons (funcall transform elem) (cdr lookup)))
+	    (setf partitions (cons (cons key (list (funcall transform elem))) partitions)))))
+    partitions))
 
+(defstruct scene
+    schematic
+    response-list
+ )
+
+(defun train-classes-by-feature (scene-list &key (schematic-key-fn
+						  #'(lambda (scm)
+						      (list (object-shape (last-object scm)))))
+				 (parse-tree-winnowing-fn #'words-in-subject-filter))
+  "scene-key-fn should return a list of features from a schematic"
+  (let* ((scene-feature-list (mapcan #'(lambda (scene) 
+					(mapcar #'(lambda (feature) (cons feature scene))
+						(funcall schematic-key-fn (scene-schematic scene))))
+				    scene-list))
+	 (feature-partition (partition scene-feature-list :key #'car :transform #'cdr))
+	 (num-classifications (reduce #'+ (mapcar #'(lambda (feature-list) (length (cdr feature-list)))
+						  feature-partition))))
+    (mapcar #'(lambda (feature-list)
+		(nbc-class-from-feature-bag (mapcan #'(lambda (scene) (mapcan parse-tree-winnowing-fn 
+									      (scene-response-list scene))) 
+						    (cdr feature-list))
+					    :label (car feature-list)
+					    :prior (/ (length (cdr feature-list))
+						      num-classifications)))
+	    feature-partition)))
+
+(defun train-classes-by-feature (scene-list &key (schematic-key-fn
+						  #'(lambda (scm)
+						      (list (object-shape (last-object scm)))))
+				 (parse-tree-winnowing-fn #'words-in-subject-filter))
+
+      
 (defun most-common-features-class (class &optional (n 3))
   (reverse (mapcar #'car (last (reverse (sort-ht-descending (nbc-class-distribution class))) n))))
 
