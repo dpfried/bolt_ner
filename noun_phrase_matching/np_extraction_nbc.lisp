@@ -98,9 +98,9 @@ the full specification."
   (/ (reduce #'+ vals)
      (length vals)))
 
-(defun standard-deviation (vals)
-  (let ((mean (mean vals)))
-    (sqrt (/ (reduce #'+ (mapcar #'(lambda (v) (expt (- v mean) 2))
+(defun standard-deviation (vals &optional mean)
+  (let ((m (or mean (mean vals))))
+    (sqrt (/ (reduce #'+ (mapcar #'(lambda (v) (expt (- v m) 2))
 			      vals))
 	     (length vals)))))
 
@@ -170,11 +170,12 @@ the full specification."
   (let ((mass-sum (sum-ht-values ht)) 
 	(acc-mass 0)
 	(new-hash (make-hash-table)))
-    (let ((pairs (sort-ht-descending ht))) ; pairs is sorted by value, descending
+    (let ((pairs (sort-ht-descending ht))) ; pairs sorted by value, descending
       (while (and pairs
 		  (< (/ acc-mass mass-sum) mass-to-retain)) ; may go over mass-to-retain. not sure if this is a problem
 	(destructuring-bind (key . value) (car pairs)
-	  (setf (gethash key new-hash) value))
+	  (setf (gethash key new-hash) value)
+	  (incf acc-mass value))
 	(setf pairs (cdr pairs))))
     new-hash))
 
@@ -469,17 +470,6 @@ the full specification."
     parse-forest
  )
 
-(defun train-classes-shape-subject (scene-list)
-  (train-classes-by-feature scene-list 
-			    :parse-tree-winnowing-fn #'words-in-subject-filter
-			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-shape (last-object scm))))))
-
-(defun train-classes-color-subject (scene-list)
-  (train-classes-by-feature scene-list 
-			    :parse-tree-winnowing-fn #'words-in-subject-filter
-			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-color (last-object scm))))))
 
 (defun read-scenes-sequence (sequence-id)
   (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id))
@@ -489,7 +479,7 @@ the full specification."
   (mapcan #'read-scenes-sequence
 	  (range 1 14)))			    
 
-(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn)
+(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'identity))
   "scene-key-fn should return a list of features from a schematic"
   (let* ((scene-feature-list (mapcan #'(lambda (scene) 
 					(mapcar #'(lambda (feature) (cons feature scene))
@@ -504,9 +494,24 @@ the full specification."
 						    (cdr feature-list))
 					    :label (format nil "~A" (car feature-list))
 					    :prior (/ (length (cdr feature-list))
-						      num-classifications)))
+						      num-classifications)
+					    :ht-skimming-fn ht-skimming-fn))
+	    
 	    feature-partition)))
 
+(defun train-classes-shape-subject (scene-list &optional (mass-to-retain 3/10))
+  (train-classes-by-feature scene-list 
+			    :parse-tree-winnowing-fn #'words-in-subject-filter
+			    :schematic-key-fn #'(lambda (scm)
+						  (list (object-shape (last-object scm))))
+			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+
+(defun train-classes-color-subject (scene-list &optional (mass-to-retain 3/10))
+  (train-classes-by-feature scene-list 
+			    :parse-tree-winnowing-fn #'words-in-subject-filter
+			    :schematic-key-fn #'(lambda (scm)
+						  (list (object-color (last-object scm))))
+			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
       
 (defun most-common-features-class (class &optional (n 3))
   (reverse (mapcar #'car (last (reverse (sort-ht-descending (nbc-class-distribution class))) n))))
@@ -522,3 +527,17 @@ the full specification."
 (defun foo-subject-isolation (sequence-index scene-index)
   (mapcar #'words-from-tree (apply #'identify-nouns-in-parse-forest (scene-parse-forest (scene-lfs sequence-index scene-index))
 				   (classes-subject-isolation-sequence sequence-index scene-index))))
+
+(defun all-innermost-nps (&rest scene-list)
+  (mapcar #'words-from-forest (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list)))
+
+(defun standardize-scores (feature-bag-list &rest classes)
+  (let* ((all-scores (mapcar #'(lambda (fb) (nbc-score-feature-bag fb classes)) feature-bag-list))
+	 (flattened (apply #'append all-scores))
+	 (mean (mean flattened))
+	 (sd (standard-deviation flattened)))
+    (mapcar #'(lambda (lst) (standardize lst mean sd)) all-scores)))
+
+(defun foo (feature-bag &rest classes)
+  (mapcar #'(lambda (a b) (list feature-bag a b))
+	  (identity (nbc-score-feature-bag feature-bag classes)) (mapcar #'nbc-class-label classes)))
