@@ -263,6 +263,9 @@ the full specification."
 							   none-of))
 				 (ancestor-list parse-tree)))))
 
+(defun words-in-innermost-np (parse-tree)
+  (words-from-forest (get-innermost-nps parse-tree)))
+
 
 ;;;; naive bayes classifier with additive smoothing
 (defun laplace-smoothed-probability (feature class-distribution size-of-feature-domain)
@@ -308,8 +311,11 @@ the full specification."
 
 (defun nbc-classify (feature-bag classes &optional score-list)
   (let* ((scores (or score-list (nbc-score-feature-bag feature-bag classes)))
-	 (classes-scores (mapcar #'cons scores classes)))
-    (cdr (argmax classes-scores #'car))))
+	 (classes-scores (mapcar #'cons scores classes))
+	 (max-class-score (argmax classes-scores #'car)))
+    (values (cdr max-class-score)
+	    (car max-class-score))))
+
 
 ;;;; in progress
 (defun ground-lfs () (read-lfs "~/bolt_gt/dumps_raw/base_obj.parsed"))
@@ -499,14 +505,28 @@ the full specification."
 	    
 	    feature-partition)))
 
-(defun train-classes-shape-subject (scene-list &optional (mass-to-retain 3/10))
+(defun train-classes-shape-subject (scene-list &optional (mass-to-retain 1))
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-subject-filter
 			    :schematic-key-fn #'(lambda (scm)
 						  (list (object-shape (last-object scm))))
 			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
 
-(defun train-classes-color-subject (scene-list &optional (mass-to-retain 3/10))
+(defun train-classes-color-all (scene-list &optional (mass-to-retain 1))
+  (train-classes-by-feature scene-list 
+			    :parse-tree-winnowing-fn #'words-in-innermost-np
+			    :schematic-key-fn #'(lambda (scm)
+						  (mapcar #'object-color (objects scm)))
+			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+
+(defun train-classes-shape-all (scene-list &optional (mass-to-retain 1))
+  (train-classes-by-feature scene-list 
+			    :parse-tree-winnowing-fn #'words-in-innermost-np
+			    :schematic-key-fn #'(lambda (scm)
+						  (mapcar #'object-shape (objects scm)))
+			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+
+(defun train-classes-color-subject (scene-list &optional (mass-to-retain 1))
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-subject-filter
 			    :schematic-key-fn #'(lambda (scm)
@@ -531,13 +551,59 @@ the full specification."
 (defun all-innermost-nps (&rest scene-list)
   (mapcar #'words-from-forest (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list)))
 
-(defun standardize-scores (feature-bag-list &rest classes)
-  (let* ((all-scores (mapcar #'(lambda (fb) (nbc-score-feature-bag fb classes)) feature-bag-list))
-	 (flattened (apply #'append all-scores))
-	 (mean (mean flattened))
-	 (sd (standard-deviation flattened)))
-    (mapcar #'(lambda (lst) (standardize lst mean sd)) all-scores)))
 
+(defstruct distribution-parameters
+  n
+  mean
+  sd
+  )
+
+(defun classify-threshold-with-parameters (feature-bag distribution-parameters &rest classes)
+  (let* ((sd (distribution-parameters-sd distribution-parameters))
+	 (mean (distribution-parameters-mean distribution-parameters))
+	 (raw-scores (nbc-score-feature-bag feature-bag classes))
+	 (std-scores (standardize raw-scores mean sd)))
+    (if (find-if #'(lambda (n) (> n 0)) std-scores)
+	(nbc-classify feature-bag classes raw-scores)
+	(values nil (cadr (multiple-value-list (nbc-classify feature-bag classes raw-scores)))))))
+
+(defun classify-threshold (feature-bag model-distribution-parameters &rest classes)
+  (apply #'classify-threshold-with-parameters feature-bag (cdr (assoc (length feature-bag)
+								      model-distribution-parameters))
+	 classes))
+  
+  
+
+(defun model-distribution-parameters-by-length (feature-bag-list &rest classes)
+  (let ((by-length (partition feature-bag-list :key #'length)))
+    (mapcar #'(lambda (pair)
+		(let* ((length (car pair))
+		       (feature-bag-list-sub (cdr pair))
+		       (all-scores (mapcar #'(lambda (fb) (nbc-score-feature-bag fb classes)) feature-bag-list-sub))
+		       (n (length all-scores))
+		       (flattened (apply #'append all-scores)))
+		  (cons length
+			(make-distribution-parameters
+			 :mean (mean flattened)
+			 :sd (standard-deviation flattened)
+			 :n n))))
+    by-length)))
+
+(defun model-distribution-parameters (training-fn &optional (feature-extraction-fn #'all-innermost-nps))
+  (apply #'model-distribution-parameters-by-length (apply feature-extraction-fn (read-scenes-all)) (funcall training-fn (read-scenes-all))))
+
+(defun shape-distribution-subject ()
+  (model-distribution-parameters #'train-classes-shape-subject))
+
+(defun color-distribution-subject ()
+  (model-distribution-parameters #'train-classes-color-subject))
+
+(defun color-distribution-all ()
+  (model-distribution-parameters #'train-classes-color-all))
+
+(defun shape-distribution-all ()
+  (model-distribution-parameters #'train-classes-shape-all))
+			      
 (defun foo (feature-bag &rest classes)
   (mapcar #'(lambda (a b) (list feature-bag a b))
 	  (identity (nbc-score-feature-bag feature-bag classes)) (mapcar #'nbc-class-label classes)))
