@@ -1,40 +1,10 @@
-;;;; file utilities
+;;;; logical form utilities
 (defun read-lfs (filename)
   "filename should be a file that contains a list of responses. Each response is also a list - the car is the original string, and the remaining elements are the parse trees returned by TRIPS for that string"
   (with-open-file (file filename)
     (read file nil)))
 
-(defun scene-lfs (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "responses.parsed"))
-  "load the logical forms from a given sequence and scene"
-  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename)))
-
-(defun read-scene-schematic (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "schematic.lisp"))
-  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
-    (read file nil)))
-
-(defun read-scene (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/"))
-  (make-scene 
-   :schematic (read-scene-schematic sequence-id scene-id base-path)
-   :parse-forest (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
-
-(defun read-ground-scene (&optional (path "~/bolt_gt/dumps_raw/base_obj.parsed"))
-  (make-scene
-   :parse-forest (mapcan #'cdr (read-lfs path))))
-
-(defun camera (schematic)
-  (car schematic))
-
-(defun objects (schematic)
-  (cdr schematic))
-
-(defun last-object (schematic)
-  (car (last (objects schematic))))
-
-(defun object-shape (object)
-  (cdr (assoc 'type object)))
-
-(defun object-color (object)
-  (cdr (assoc 'color (cdr (assoc 'settings object)))))
+(defun ground-lfs () (read-lfs "~/bolt_gt/dumps_raw/base_obj.parsed"))
 
 (defun export-nps (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "noun-phrases"))
   (let ((scene-lfs (scene-lfs sequence-id scene-id)))
@@ -53,34 +23,33 @@
 	  (print word-list)
 	  (print word-list stream))))))
 
+(defun sequence-length (sequence-index)
+  (ecase sequence-index
+    (1 2)
+    (2 3)
+    (3 4)
+    (4 5)
+    (5 3)
+    (6 3)
+    (7 4)
+    (8 6)
+    (9 3)
+    (10 5)
+    (11 2)
+    (12 5)
+    (13 3)
+    (14 8)))
+
 ;;;; general utilities
+(defun range (start end)
+  (if (> start end)
+      nil
+      (cons start (range (1+ start) end))))
 
 (defmacro while (test &rest body)
   `(do ()
        ((not ,test))
      ,@body))
-
-(defun comparator (test &optional (key #'identity))
-  "Comparison operator: auxilliary function used by EXTREMUM"
-  (declare (optimize (speed 3) (safety 0) (space 0) (debug 1)))
-  (lambda (a b) 
-    (let ((f_a (funcall key a))
-	  (f_b (funcall key b)))
-      (if (funcall test f_a f_b)
-	  (values a f_a)
-	  (values b f_b)))))
-
-(defun extremum (sequence predicate
-		  &key (key #'identity) (start 0) end)
-  "Returns the element of SEQUENCE that would appear first if the
-sequence were ordered according to SORT using PREDICATE and KEY using
-an unstable sorting algorithm. See http://www.cliki.net/EXTREMUM for
-the full specification."
-    (reduce (comparator predicate key) sequence
-	        :start start :end end))
-
-;(defun argmax (lst key)
-;  (extremum lst #'> :key key))
 
 (defun argmax (lst key)
   (let (max-item max-val)
@@ -97,6 +66,12 @@ the full specification."
        (= (length (intersection none-of lst)) 0)))
 
 ;;;; statistics
+(defstruct distribution-parameters
+  n
+  mean
+  sd
+  )
+
 (defun mean (vals)
   (/ (reduce #'+ vals)
      (length vals)))
@@ -250,6 +225,9 @@ the full specification."
 		 (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) 
 	     (get-nps parse-tree)))
 
+(defun all-innermost-nps (&rest scene-list)
+  (mapcar #'words-from-forest (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list)))
+
 ;;;; noun-phrase filtering
 (defun words-in-subject-filter (parse-tree)
   "return a list of the words that appear to be in a subject noun-phrase of the parse-tree. 
@@ -314,9 +292,7 @@ the full specification."
     (values (cdr max-class-score)
 	    (car max-class-score))))
 
-;;;; in progress
-(defun ground-lfs () (read-lfs "~/bolt_gt/dumps_raw/base_obj.parsed"))
-
+#|
 (defun identify-nouns (sexp &rest classes)
   (if (listp sexp)
       (if (and (eq (car sexp) 'np)
@@ -325,138 +301,7 @@ the full specification."
 							  classes))))
 	  (cons (car sexp) (mapcar #'(lambda (s) (apply #'identify-nouns s classes)) (cdr sexp))))
       sexp))
-
-;(defun scene-parse-forest (scene-lfs)
-;  (mapcan #'cdr scene-lfs))
-
-(defun scene-class-all-words (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let ((word-bag (words-from-forest (scene-parse-forest scene-lfs))))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scenes-class-all-words (scene-lfs-list &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let ((word-bag (words-from-forest (mapcan #'scene-parse-forest scene-lfs-list))))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scene-class-all-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let* ((np-list (mapcan #'get-nps (scene-parse-forest scene-lfs)))
-	 (word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scenes-class-all-noun-phrases (scene-lfs-list &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let* ((np-list (mapcan #'get-nps (mapcan #'scene-parse-forest scene-lfs-list)))
-	(word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scene-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-arrgs
-  (let* ((np-list (mapcan #'get-innermost-nps (scene-parse-forest scene-lfs)))
-	 (word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scenes-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-arrgs
-  (let* ((np-list (mapcan #'get-innermost-nps (mapcan #'scene-parse-forest scene-lfs)))
-	 (word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scene-class-subject-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-arrgs
-  (let ((word-bag (mapcan #'words-in-subject-filter (scene-parse-forest scene-lfs))))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun reciprocal (x)
-  (/ 1 x))
-
-(defun foo-np (np &rest scene-lfs)
-  (let ((n -1))
-    (apply #'identify-nouns np 
-	   (mapcar #'(lambda (lfs) (scene-class-innermost-noun-phrases lfs
-								       :label (incf n)
-								       :prior (reciprocal (length scene-lfs))))
-		   scene-lfs))))
-
-(defun range (start end)
-  (if (> start end)
-      nil
-      (cons start (range (1+ start) end))))
-
-(defun object-class-features (sequence-index starting-scene-index ending-scene-index &key label prior class-fn)
-  label ; ignore
-  prior ; ignore
-  (funcall class-fn (mapcar #'(lambda (n) (scene-lfs sequence-index n))
-					       (range starting-scene-index ending-scene-index))
-				       :label label
-				       :prior prior))
-
-(defun sequence-length (sequence-index)
-  (ecase sequence-index
-    (1 2)
-    (2 3)
-    (3 4)
-    (4 5)
-    (5 3)
-    (6 3)
-    (7 4)
-    (8 6)
-    (9 3)
-    (10 5)
-    (11 2)
-    (12 5)
-    (13 3)
-    (14 8)))
-
-(defun classes-all-objects-all-scenes (&optional (class-fn #'scene-class-innermost-noun-phrases))
-  (mapcan #'(lambda (sequence-index)
-	      (let ((seq-len (sequence-length sequence-index)))
-		(mapcar #'(lambda (scene-index)
-			    (let ((class 
-			    (funcall #'object-class-features sequence-index scene-index
-								 (1- seq-len)
-								 :class-fn class-fn
-								 :label (format nil "~A ~A" sequence-index scene-index)
-								 ;:prior (/ (- seq-len scene-index) seq-len)))
-								 :prior 1)))
-;			      (setf (nbc-class-label class)(format nil "~A" (most-common-features-class class)))
-			      class))
-			(range 0 (1- seq-len)))))
-	  (range 1 14)))
-
-(defun classes-subject-isolation-all ()
-  (mapcan #'(lambda (sequence-index)
-	      (let ((seq-len (sequence-length sequence-index)))
-		(mapcar #'(lambda (scene-index)
-			    (let ((class
-			    (scene-class-subject-noun-phrases (scene-lfs sequence-index scene-index)
-							      :prior 1)))
-			      (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
-								       class)))
-			      class))
-			(range 0 (1- seq-len)))))
-	  (range 1 14)))
-
-(defun classes-subject-isolation-sequence (sequence-index &optional end-scene)
-  (let ((last-scene (or end-scene (1- (sequence-length sequence-index)))))
-    (cons (scene-class-all-words (ground-lfs) :label "(GROUND)"
-				  :prior 1)
-    (mapcar #'(lambda (scene-index)
-		(let ((class
-		       (scene-class-subject-noun-phrases (scene-lfs sequence-index scene-index)
-							 :prior 1)))
-		  (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
-								 class)))
-		  class))
-	    (range 0 last-scene)))))
+|#
 
 (defun partition (sequence &key (key #'identity) (equivalence-test #'eq) (transform #'identity))
   (let (partitions)
@@ -468,6 +313,7 @@ the full specification."
 	    (setf partitions (cons (cons key (list (funcall transform elem))) partitions)))))
     partitions))
 
+;;;; scene functions
 (defstruct scene
     schematic
     parse-forest
@@ -481,6 +327,44 @@ the full specification."
   (mapcan #'read-scenes-sequence
 	  (range 1 14)))			    
 
+(defun scene-lfs (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "responses.parsed"))
+  "load the logical forms from a given sequence and scene"
+  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename)))
+
+(defun read-scene-schematic (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "schematic.lisp"))
+  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
+    (read file nil)))
+
+(defun read-scene (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/"))
+  (make-scene 
+   :schematic (read-scene-schematic sequence-id scene-id base-path)
+   :parse-forest (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
+
+(defun read-ground-scene (&optional (path "~/bolt_gt/dumps_raw/base_obj.parsed"))
+  (make-scene
+   :parse-forest (mapcan #'cdr (read-lfs path))))
+
+(defun camera (schematic)
+  (car schematic))
+
+(defun objects (schematic)
+  (cdr schematic))
+
+(defun last-object (schematic)
+  (car (last (objects schematic))))
+
+(defun object-shape (object)
+  (cdr (assoc 'type object)))
+
+(defun object-color (object)
+  (cdr (assoc 'color (cdr (assoc 'settings object)))))
+
+;;;; training functions: take a scene list. for each scene, 
+;;;; extract words from all response parse trees according 
+;;;; to a parse tree winnowing function, then generate a 
+;;;; class for each scene using these words as a bag of 
+;;;; features. Labels and creates a prior for each class 
+;;;; too, this behavior varies from function to function
 (defun train-classes-subject-isolation (scene-list &key ground-scene (ht-skimming-fn #'identity))
   (let ((scene-classes 
 	 (mapcar #'(lambda (scene count)
@@ -490,9 +374,6 @@ the full specification."
 								 (length scene-list)))
 						 :label (format nil "~A" count)
 						 :ht-skimming-fn ht-skimming-fn))
-;		     (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
-;								      class)))
-;		       class))
 		 scene-list (range 0 (1- (length scene-list))))))
     (if ground-scene
 	(cons (nbc-class-from-feature-bag (mapcan #'words-in-subject-filter (scene-parse-forest ground-scene))
@@ -556,38 +437,21 @@ the full specification."
 (defun identify-nouns-in-parse-forest (parse-forest &rest classes)
   (mapcar #'(lambda (pt) (apply #'identify-nouns pt classes)) parse-forest))
 
-(defun foo-all-objects-all-scenes (sequence-index scene-index &optional (class-fn #'scene-class-innermost-noun-phrases))
-  (let ((classes (classes-all-objects-all-scenes class-fn)))
-    (mapcar #'words-from-tree (apply #'identify-nouns-in-parse-forest (scene-parse-forest (scene-lfs sequence-index scene-index))
-				     classes))))
-
-(defun foo-subject-isolation (sequence-index scene-index)
-  (mapcar #'words-from-tree (apply #'identify-nouns-in-parse-forest (scene-parse-forest (scene-lfs sequence-index scene-index))
-				   (classes-subject-isolation-sequence sequence-index scene-index))))
-
-(defun all-innermost-nps (&rest scene-list)
-  (mapcar #'words-from-forest (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list)))
-
-(defstruct distribution-parameters
-  n
-  mean
-  sd
-  )
-
 (defun classify-threshold-with-parameters (feature-bag distribution-parameters &rest classes)
   (let* ((sd (distribution-parameters-sd distribution-parameters))
 	 (mean (distribution-parameters-mean distribution-parameters))
 	 (raw-scores (nbc-score-feature-bag feature-bag classes))
 	 (std-scores (standardize raw-scores mean sd)))
     (if (find-if #'(lambda (n) (> n 0)) std-scores)
-	(nbc-classify feature-bag classes raw-scores)
-	(values nil (cadr (multiple-value-list (nbc-classify feature-bag classes raw-scores)))))))
+	(nbc-classify feature-bag classes std-scores)
+	(values nil (cadr (multiple-value-list (nbc-classify feature-bag classes std-scores)))))))
 
 (defun classify-threshold (feature-bag model-distribution-parameters &rest classes)
   (apply #'classify-threshold-with-parameters feature-bag (cdr (assoc (length feature-bag)
 								      model-distribution-parameters))
 	 classes))
 
+;;;; calculate model distributions
 (defun model-distribution-parameters-by-length (feature-bag-list &rest classes)
   (let ((by-length (partition feature-bag-list :key #'length)))
     (mapcar #'(lambda (pair)
@@ -601,10 +465,14 @@ the full specification."
 			 :mean (mean flattened)
 			 :sd (standard-deviation flattened)
 			 :n n))))
-    by-length)))
+	    by-length)))
 
-(defun model-distribution-parameters (training-fn &optional (feature-extraction-fn #'all-innermost-nps))
-  (apply #'model-distribution-parameters-by-length (apply feature-extraction-fn (read-scenes-all)) (funcall training-fn (read-scenes-all))))
+(defun model-distribution-parameters (training-fn &key (classification-feature-extraction-fn #'all-innermost-nps) 
+				      (classification-scenes (read-scenes-all)) 
+				      (training-scenes (read-scenes-all)))
+  (apply #'model-distribution-parameters-by-length 
+	 (apply classification-feature-extraction-fn classification-scenes)
+	 (funcall training-fn training-scenes)))
 
 (defun shape-distribution-subject ()
   (model-distribution-parameters #'train-classes-shape-subject))
@@ -617,7 +485,8 @@ the full specification."
 
 (defun shape-distribution-all ()
   (model-distribution-parameters #'train-classes-shape-all))
-			      
-(defun foo (feature-bag &rest classes)
-  (mapcar #'(lambda (a b) (list feature-bag a b))
-	  (identity (nbc-score-feature-bag feature-bag classes)) (mapcar #'nbc-class-label classes)))
+
+(defun object-distribution (training-scenes classification-scenes)
+  (model-distribution-parameters #'train-classes-subject-isolation
+				 :training-scenes training-scenes 
+				 :classification-scenes classification-scenes))
