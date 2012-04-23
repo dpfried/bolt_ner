@@ -17,6 +17,10 @@
    :schematic (read-scene-schematic sequence-id scene-id base-path)
    :parse-forest (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
 
+(defun read-ground-scene (&optional (path "~/bolt_gt/dumps_raw/base_obj.parsed"))
+  (make-scene
+   :parse-forest (mapcan #'cdr (read-lfs path))))
+
 (defun camera (schematic)
   (car schematic))
 
@@ -86,7 +90,6 @@ the full specification."
 	  (setf max-item x
 		max-val (funcall key x))))
     (values max-item max-val)))
-    
 
 (defun inclusion-exclusion? (lst one-of none-of)
   "return true iff the lst contain all the atoms in one-of and none of the atoms in none-of"
@@ -187,7 +190,6 @@ the full specification."
 	     ht)
     new-hash))
 
-
 ;;;; building distributions from lists of items
 (defun frequencies (word-list)
   "return a hash-table containing the frequency counts of the items in the list"
@@ -231,7 +233,6 @@ the full specification."
 	  (or (eq (car tree) node)
 	      (some #'(lambda (s) (has-internal-node? s node)) (cdr tree))))))
 
-
 ;;;; parse-tree specific
 (defun words-from-tree (parse-tree)
   (leaves parse-tree))
@@ -249,7 +250,6 @@ the full specification."
 		 (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) 
 	     (get-nps parse-tree)))
 
-
 ;;;; noun-phrase filtering
 (defun words-in-subject-filter (parse-tree)
   "return a list of the words that appear to be in a subject noun-phrase of the parse-tree. 
@@ -265,7 +265,6 @@ the full specification."
 
 (defun words-in-innermost-np (parse-tree)
   (words-from-forest (get-innermost-nps parse-tree)))
-
 
 ;;;; naive bayes classifier with additive smoothing
 (defun laplace-smoothed-probability (feature class-distribution size-of-feature-domain)
@@ -283,7 +282,6 @@ the full specification."
   (make-nbc-class :distribution (funcall ht-skimming-fn (frequencies feature-bag))
 		  :prior prior
 		  :label (or label feature-bag)))
-
 
 (defun nbc-score (feature-bag class-distribution class-prior size-of-feature-domain)
   "get the nbc score for a bag of features and the distribution for a given class
@@ -315,7 +313,6 @@ the full specification."
 	 (max-class-score (argmax classes-scores #'car)))
     (values (cdr max-class-score)
 	    (car max-class-score))))
-
 
 ;;;; in progress
 (defun ground-lfs () (read-lfs "~/bolt_gt/dumps_raw/base_obj.parsed"))
@@ -396,7 +393,7 @@ the full specification."
 
 (defun object-class-features (sequence-index starting-scene-index ending-scene-index &key label prior class-fn)
   label ; ignore
-  prior ;ignore
+  prior ; ignore
   (funcall class-fn (mapcar #'(lambda (n) (scene-lfs sequence-index n))
 					       (range starting-scene-index ending-scene-index))
 				       :label label
@@ -474,16 +471,36 @@ the full specification."
 (defstruct scene
     schematic
     parse-forest
- )
+    )
 
-
-(defun read-scenes-sequence (sequence-id)
+(defun read-scenes-sequence (sequence-id &optional num-to-read)
   (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id))
-	  (range 0 (1- (sequence-length sequence-id)))))
+	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
 
 (defun read-scenes-all ()
   (mapcan #'read-scenes-sequence
 	  (range 1 14)))			    
+
+(defun train-classes-subject-isolation (scene-list &key ground-scene (ht-skimming-fn #'identity))
+  (let ((scene-classes 
+	 (mapcar #'(lambda (scene count)
+		     (nbc-class-from-feature-bag (mapcan #'words-in-subject-filter (scene-parse-forest scene))
+						 :prior (/ 1 (if ground-scene 
+								 (1+ (length scene-list))
+								 (length scene-list)))
+						 :label (format nil "~A" count)
+						 :ht-skimming-fn ht-skimming-fn))
+;		     (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
+;								      class)))
+;		       class))
+		 scene-list (range 0 (1- (length scene-list))))))
+    (if ground-scene
+	(cons (nbc-class-from-feature-bag (mapcan #'words-in-subject-filter (scene-parse-forest ground-scene))
+					  :prior (/ 1 (1+ (length scene-list)))
+					  :label (format nil "~A" 'ground))
+	      scene-classes)
+	scene-classes)))
+
 
 (defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'identity))
   "scene-key-fn should return a list of features from a schematic"
@@ -551,7 +568,6 @@ the full specification."
 (defun all-innermost-nps (&rest scene-list)
   (mapcar #'words-from-forest (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list)))
 
-
 (defstruct distribution-parameters
   n
   mean
@@ -571,8 +587,6 @@ the full specification."
   (apply #'classify-threshold-with-parameters feature-bag (cdr (assoc (length feature-bag)
 								      model-distribution-parameters))
 	 classes))
-  
-  
 
 (defun model-distribution-parameters-by-length (feature-bag-list &rest classes)
   (let ((by-length (partition feature-bag-list :key #'length)))
