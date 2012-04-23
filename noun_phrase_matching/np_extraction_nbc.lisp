@@ -15,7 +15,7 @@
 (defun read-scene (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/"))
   (make-scene 
    :schematic (read-scene-schematic sequence-id scene-id base-path)
-   :response-list (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
+   :parse-forest (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
 
 (defun camera (schematic)
   (car schematic))
@@ -274,15 +274,20 @@ the full specification."
 	 (likelihood (if product (exp product) 0)))
     (* class-prior likelihood)))
 
-(defun nbc-classify (feature-bag classes)
-  (let ((size-of-feature-domain (hash-table-count 
-				 (apply #'merge-hash-tables 
+(defun nbc-score-feature-bag (feature-bag classes)
+  (let ((size-of-feature-domain (hash-table-count
+				 (apply #'merge-hash-tables
 					(mapcar #'nbc-class-distribution classes)))))
-    (argmax classes #'(lambda (class) (nbc-score feature-bag 
-						 (nbc-class-distribution class) 
-						 (nbc-class-prior class) 
-						 size-of-feature-domain)))))
+    (mapcar #'(lambda (class) (nbc-score feature-bag
+					 (nbc-class-distribution class)
+					 (nbc-class-prior class)
+					 size-of-feature-domain))
+	    classes)))
 
+(defun nbc-classify (feature-bag classes &optional score-list)
+  (let* ((scores (or score-list (nbc-score-feature-bag feature-bag classes)))
+	 (classes-scores (mapcar #'cons scores classes)))
+    (cdr (argmax classes-scores #'car))))
 
 ;;;; in progress
 (defun ground-lfs () (read-lfs "~/bolt_gt/dumps_raw/base_obj.parsed"))
@@ -296,8 +301,8 @@ the full specification."
 	  (cons (car sexp) (mapcar #'(lambda (s) (apply #'identify-nouns s classes)) (cdr sexp))))
       sexp))
 
-(defun scene-parse-forest (scene-lfs)
-  (mapcan #'cdr scene-lfs))
+;(defun scene-parse-forest (scene-lfs)
+;  (mapcan #'cdr scene-lfs))
 
 (defun scene-class-all-words (scene-lfs &rest key-args &key label prior)
   label ; ignore, passed to class constructor through key-args
@@ -440,13 +445,30 @@ the full specification."
 
 (defstruct scene
     schematic
-    response-list
+    parse-forest
  )
 
-(defun train-classes-by-feature (scene-list &key (schematic-key-fn
-						  #'(lambda (scm)
-						      (list (object-shape (last-object scm)))))
-				 (parse-tree-winnowing-fn #'words-in-subject-filter))
+(defun train-classes-shape-subject (scene-list)
+  (train-classes-by-feature scene-list 
+			    :parse-tree-winnowing-fn #'words-in-subject-filter
+			    :schematic-key-fn #'(lambda (scm)
+						  (list (object-shape (last-object scm))))))
+
+(defun train-classes-color-subject (scene-list)
+  (train-classes-by-feature scene-list 
+			    :parse-tree-winnowing-fn #'words-in-subject-filter
+			    :schematic-key-fn #'(lambda (scm)
+						  (list (object-color (last-object scm))))))
+
+(defun read-scenes-sequence (sequence-id)
+  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id))
+	  (range 0 (1- (sequence-length sequence-id)))))
+
+(defun read-scenes-all ()
+  (mapcan #'read-scenes-sequence
+	  (range 1 14)))			    
+
+(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn)
   "scene-key-fn should return a list of features from a schematic"
   (let* ((scene-feature-list (mapcan #'(lambda (scene) 
 					(mapcar #'(lambda (feature) (cons feature scene))
@@ -457,17 +479,12 @@ the full specification."
 						  feature-partition))))
     (mapcar #'(lambda (feature-list)
 		(nbc-class-from-feature-bag (mapcan #'(lambda (scene) (mapcan parse-tree-winnowing-fn 
-									      (scene-response-list scene))) 
+									      (scene-parse-forest scene))) 
 						    (cdr feature-list))
-					    :label (car feature-list)
+					    :label (format nil "~A" (car feature-list))
 					    :prior (/ (length (cdr feature-list))
 						      num-classifications)))
 	    feature-partition)))
-
-(defun train-classes-by-feature (scene-list &key (schematic-key-fn
-						  #'(lambda (scm)
-						      (list (object-shape (last-object scm)))))
-				 (parse-tree-winnowing-fn #'words-in-subject-filter))
 
       
 (defun most-common-features-class (class &optional (n 3))
