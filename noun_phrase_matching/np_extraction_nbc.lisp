@@ -527,3 +527,18 @@
 				 (funcall #'classify-threshold fb dist-params classes)))
 		 classification-features))))
 
+(defun display-t-and-c-list (list)
+  (dolist (elem list)
+    (print (format nil "nounp: ~A" (car elem)))
+    (if (null (caadr elem))
+	(progn 
+	  (pprint "no class match above mean")
+	  (pprint (format nil "class: ~A" (nbc-class-label (second (cadr elem)))))
+	  (pprint (format nil "std posterior: ~A" (car (last (cadr elem))))))
+	(progn
+	  (pprint (format nil "class: ~A" (nbc-class-label (caadr elem))))
+	  (pprint (format nil "std posterior: ~A" (car (last (cadr elem)))))))
+    (terpri)))
+
+	   
+		   
