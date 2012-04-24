@@ -60,6 +60,9 @@
 		max-val (funcall key x))))
     (values max-item max-val)))
 
+(defun zip (&rest lists)
+  (apply #'mapcar #'list lists))
+
 (defun inclusion-exclusion? (lst one-of none-of)
   "return true iff the lst contain all the atoms in one-of and none of the atoms in none-of"
   (and (> (length (intersection one-of lst)) 0)
@@ -87,10 +90,15 @@
 	       (mean vals)))
 	(sd (or standard-deviation 
 		(standard-deviation vals))))
-  (mapcar #'(lambda (v)
-	      (/ (- v m)
-		 sd))
-	  vals)))
+    (if (= standard-deviation 0) ; all values equal the mean
+	(mapcar #'(lambda (v) 
+		    v ; ignore
+		    0)
+		vals)
+	(mapcar #'(lambda (v)
+		    (/ (- v m)
+		       sd))
+		vals))))
 
 ;;;; hash-table utilities
 
@@ -127,7 +135,7 @@
 			(list (car assoc-pair) (cdr assoc-pair)))
 		    (sort-ht-descending ht)))))
 
-(defun merge-hash-tables (&rest tables)
+(defun merge-hash-tables (tables)
   "http://pleac.sourceforge.net/pleac_commonlisp/hashes.html"
   (let ((union
          (make-hash-table
@@ -219,14 +227,20 @@
   "list of sub-trees within any noun-phrase in the parse-tree"
   (find-children parse-tree 'np))
 
+;(defparameter *words-to-remove* '(THE THERE A))
+(defparameter *words-to-remove* nil)
+
 (defun get-innermost-nps (parse-tree)
   "list of sub-trees within any innermost noun-phrase in the parse-tree"
   (remove-if #'(lambda (sexps) 
 		 (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) 
 	     (get-nps parse-tree)))
 
-(defun all-innermost-nps (&rest scene-list)
-  (mapcar #'words-from-forest (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list)))
+(defun all-innermost-nps (scene-list)
+  (remove-if #'null (mapcar #'(lambda (forest) (remove-if 
+			      #'(lambda (word) (member word *words-to-remove*))
+					(words-from-forest forest)))
+	  (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list))))
 
 ;;;; noun-phrase filtering
 (defun words-in-subject-filter (parse-tree)
@@ -234,12 +248,12 @@
    Useful in bootstrapping scenes to identify the object that was added -- this object is 
    generally the subject of the sentence"
   (let ((one-of  '(adjp np))
-	(none-of '(quan pred pp pro art advbl)))
-    (mapcar #'car (remove-if-not #'(lambda (leaf-ancestors-pair)
+	(none-of '(pred pp pro advbl)))
+    (remove-if #'(lambda (word) (member word *words-to-remove*)) (mapcar #'car (remove-if-not #'(lambda (leaf-ancestors-pair)
 				     (inclusion-exclusion? (cadr leaf-ancestors-pair) ; the ancestors list
 							   one-of
 							   none-of))
-				 (ancestor-list parse-tree)))))
+				 (ancestor-list parse-tree))))))
 
 (defun words-in-innermost-np (parse-tree)
   (words-from-forest (get-innermost-nps parse-tree)))
@@ -277,7 +291,7 @@
 
 (defun nbc-score-feature-bag (feature-bag classes)
   (let ((size-of-feature-domain (hash-table-count
-				 (apply #'merge-hash-tables
+				 (funcall #'merge-hash-tables
 					(mapcar #'nbc-class-distribution classes)))))
     (mapcar #'(lambda (class) (nbc-score feature-bag
 					 (nbc-class-distribution class)
@@ -365,7 +379,11 @@
 ;;;; class for each scene using these words as a bag of 
 ;;;; features. Labels and creates a prior for each class 
 ;;;; too, this behavior varies from function to function
-(defun train-classes-subject-isolation (scene-list &key ground-scene (ht-skimming-fn #'identity))
+
+(defparameter *ht-min-threshold* 1)
+
+(defun train-classes-subject-isolation (scene-list &key ground-scene 
+					(ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
   (let ((scene-classes 
 	 (mapcar #'(lambda (scene count)
 		     (nbc-class-from-feature-bag (mapcan #'words-in-subject-filter (scene-parse-forest scene))
@@ -383,7 +401,7 @@
 	scene-classes)))
 
 
-(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'identity))
+(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
   "scene-key-fn should return a list of features from a schematic"
   (let* ((scene-feature-list (mapcan #'(lambda (scene) 
 					(mapcar #'(lambda (feature) (cons feature scene))
@@ -403,56 +421,56 @@
 	    
 	    feature-partition)))
 
-(defun train-classes-shape-subject (scene-list &optional (mass-to-retain 1))
+
+(defun train-classes-shape-subject (scene-list)
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-subject-filter
 			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-shape (last-object scm))))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+						  (list (object-shape (last-object scm))))))
 
-(defun train-classes-color-all (scene-list &optional (mass-to-retain 1))
+(defun train-classes-color-all (scene-list)
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-innermost-np
 			    :schematic-key-fn #'(lambda (scm)
-						  (mapcar #'object-color (objects scm)))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+						  (mapcar #'object-color (objects scm)))))
 
-(defun train-classes-shape-all (scene-list &optional (mass-to-retain 1))
+(defun train-classes-shape-all (scene-list)
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-innermost-np
 			    :schematic-key-fn #'(lambda (scm)
-						  (mapcar #'object-shape (objects scm)))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+						  (mapcar #'object-shape (objects scm)))))
 
-(defun train-classes-color-subject (scene-list &optional (mass-to-retain 1))
+(defun train-classes-color-subject (scene-list)
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-subject-filter
 			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-color (last-object scm))))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+						  (list (object-color (last-object scm))))))
+
       
 (defun most-common-features-class (class &optional (n 3))
   (reverse (mapcar #'car (last (reverse (sort-ht-descending (nbc-class-distribution class))) n))))
 
+#|
 (defun identify-nouns-in-parse-forest (parse-forest &rest classes)
   (mapcar #'(lambda (pt) (apply #'identify-nouns pt classes)) parse-forest))
+|#
 
-(defun classify-threshold-with-parameters (feature-bag distribution-parameters &rest classes)
+(defun classify-threshold-with-parameters (feature-bag distribution-parameters classes)
   (let* ((sd (distribution-parameters-sd distribution-parameters))
 	 (mean (distribution-parameters-mean distribution-parameters))
 	 (raw-scores (nbc-score-feature-bag feature-bag classes))
 	 (std-scores (standardize raw-scores mean sd)))
-    (if (find-if #'(lambda (n) (> n 0)) std-scores)
+    (if (find-if #'(lambda (n) (>= n 0)) std-scores)
 	(nbc-classify feature-bag classes std-scores)
-	(values nil (cadr (multiple-value-list (nbc-classify feature-bag classes std-scores)))))))
+	(apply #'values nil (multiple-value-list (nbc-classify feature-bag classes std-scores))))))
 
-(defun classify-threshold (feature-bag model-distribution-parameters &rest classes)
-  (apply #'classify-threshold-with-parameters feature-bag (cdr (assoc (length feature-bag)
+(defun classify-threshold (feature-bag model-distribution-parameters classes)
+  (classify-threshold-with-parameters feature-bag (cdr (assoc (length feature-bag)
 								      model-distribution-parameters))
 	 classes))
 
 ;;;; calculate model distributions
-(defun model-distribution-parameters-by-length (feature-bag-list &rest classes)
+(defun model-distribution-parameters-by-length (feature-bag-list classes)
   (let ((by-length (partition feature-bag-list :key #'length)))
     (mapcar #'(lambda (pair)
 		(let* ((length (car pair))
@@ -467,11 +485,11 @@
 			 :n n))))
 	    by-length)))
 
-(defun model-distribution-parameters (training-fn &key (classification-feature-extraction-fn #'all-innermost-nps) 
+(defun model-distribution-parameters (training-fn &key (feature-extraction-fn #'all-innermost-nps) 
 				      (classification-scenes (read-scenes-all)) 
 				      (training-scenes (read-scenes-all)))
-  (apply #'model-distribution-parameters-by-length 
-	 (apply classification-feature-extraction-fn classification-scenes)
+  (model-distribution-parameters-by-length 
+	 (funcall feature-extraction-fn classification-scenes)
 	 (funcall training-fn training-scenes)))
 
 (defun shape-distribution-subject ()
@@ -490,3 +508,22 @@
   (model-distribution-parameters #'train-classes-subject-isolation
 				 :training-scenes training-scenes 
 				 :classification-scenes classification-scenes))
+
+(defun train-and-classify (training-fn &key 
+			   (training-scenes (read-scenes-all))
+			   (classification-scenes (read-scenes-all))
+			   (feature-extraction-fn #'all-innermost-nps))
+  (let* ((classification-features (funcall feature-extraction-fn classification-scenes))
+	 (classes (funcall training-fn training-scenes))
+	 (dist-params (model-distribution-parameters training-fn
+						     :feature-extraction-fn
+						     feature-extraction-fn
+						     :classification-scenes 
+						     classification-scenes
+						     :training-scenes
+						     training-scenes)))
+    (zip classification-features
+	 (mapcar #'(lambda (fb) (multiple-value-list
+				 (funcall #'classify-threshold fb dist-params classes)))
+		 classification-features))))
+
