@@ -146,7 +146,7 @@
                                 (eq 0)
                                 (eql 1)
                                 (equal 2)
-                                (equalp 3)))))
+yj                                (equalp 3)))))
           :size (reduce #'max (mapcar #'hash-table-size tables)))))
     (dolist (table tables)
       (maphash (lambda (key val) (setf (gethash key union) val)) table))
@@ -305,6 +305,13 @@
 	 (max-class-score (argmax classes-scores #'car)))
     (values (cdr max-class-score)
 	    (car max-class-score))))
+
+(defun nbc-classify-return-all (feature-bag classes &optional score-list)
+  (let* ((scores (or score-list (nbc-score-feature-bag feature-bag classes)))
+	 (classes-scores (mapcar #'cons scores (mapcar #'(lambda (class) (nbc-class-label class)) classes))))
+    (sort classes-scores #'> :key #'car)))
+
+
 
 #|
 (defun identify-nouns (sexp &rest classes)
@@ -468,6 +475,19 @@
 								      model-distribution-parameters))
 	 classes))
 
+(defun classify-threshold-with-parameters-return-all (feature-bag distribution-parameters classes)
+  (let* ((sd (distribution-parameters-sd distribution-parameters))
+	 (mean (distribution-parameters-mean distribution-parameters))
+	 (raw-scores (nbc-score-feature-bag feature-bag classes))
+	 (std-scores (standardize raw-scores mean sd)))
+    (nbc-classify-return-all feature-bag classes std-scores)))
+
+(defun classify-threshold-return-all (feature-bag model-distribution-parameters classes)
+  (classify-threshold-with-parameters-return-all feature-bag (cdr (assoc (length feature-bag)
+								      model-distribution-parameters))
+	 classes))
+
+
 ;;;; calculate model distributions
 (defun model-distribution-parameters-by-length (feature-bag-list classes)
   (let ((by-length (partition feature-bag-list :key #'length)))
@@ -526,6 +546,26 @@
 				 (funcall #'classify-threshold fb dist-params classes)))
 		 classification-features))))
 
+(defun train-and-classify-return-all (training-fn &key 
+				      (training-scenes (read-scenes-all))
+				      (classification-scenes (read-scenes-all))
+				      (feature-extraction-fn #'all-innermost-nps))
+  (let* ((classification-features (funcall feature-extraction-fn classification-scenes))
+	 (classes (funcall training-fn training-scenes))
+	 (dist-params (model-distribution-parameters training-fn
+						     :feature-extraction-fn
+						     feature-extraction-fn
+						     :classification-scenes 
+						     classification-scenes
+						     :training-scenes
+						     training-scenes)))
+    (zip classification-features
+	 (mapcar #'(lambda (fb)
+		     (funcall #'classify-threshold-return-all fb dist-params classes))
+		 classification-features))))
+
+
+
 (defun display-t-and-c-list (list)
   (dolist (elem list)
     (print (format nil "nounp: ~A" (car elem)))
@@ -538,6 +578,3 @@
 	  (pprint (format nil "class: ~A" (nbc-class-label (caadr elem))))
 	  (pprint (format nil "std posterior: ~A" (car (last (cadr elem)))))))
     (terpri)))
-
-	   
-		   

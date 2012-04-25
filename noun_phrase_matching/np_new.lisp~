@@ -90,7 +90,7 @@
 	       (mean vals)))
 	(sd (or standard-deviation 
 		(standard-deviation vals))))
-    (if (= sd 0) ; all values equal the mean
+    (if (= standard-deviation 0) ; all values equal the mean
 	(mapcar #'(lambda (v) 
 		    v ; ignore
 		    0)
