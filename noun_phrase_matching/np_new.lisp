@@ -11,7 +11,7 @@
     (with-open-file (stream (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) :direction :output :if-exists :supersede)
       (dolist (response-list scene-lfs)
 	(let* ((responses (cdr response-list))
-	       (nps (mapcan #'get-nps responses))
+	       (nps (mappend #'get-nps responses))
 	       (innermost-nps (remove-if #'(lambda (sexps) (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) nps))
 	       (word-list (mapcar #'(lambda (sexps) (words-from-forest sexps)) innermost-nps)))
 	  (print "new set")
@@ -50,6 +50,9 @@
   `(do ()
        ((not ,test))
      ,@body))
+
+(defun mappend (fn &rest lsts)
+      (apply #'append (apply #'mapcar fn lsts)))
 
 (defun argmax (lst key)
   (let (max-item max-val)
@@ -146,7 +149,7 @@
                                 (eq 0)
                                 (eql 1)
                                 (equal 2)
-yj                                (equalp 3)))))
+                                (equalp 3)))))
           :size (reduce #'max (mapcar #'hash-table-size tables)))))
     (dolist (table tables)
       (maphash (lambda (key val) (setf (gethash key union) val)) table))
@@ -193,21 +196,21 @@ yj                                (equalp 3)))))
 (defun leaves (tree)
   "get a list of all leaves of a tree"
   (if (listp tree)
-      (mapcan #'leaves (cdr tree))
+      (mappend #'leaves (cdr tree))
       (list tree)))
 
 (defun find-children (tree parent-node)
   "get a list of all children of the parent-node in the tree. will match multiple if the parent-node appears multiple times"
   (if (listp tree)
       (if (eq (car tree) parent-node)
-	  (cons (cdr tree) (mapcan #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))
-	  (mapcan #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))))
+	  (cons (cdr tree) (mappend #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))
+	  (mappend #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))))
 
 (defun ancestor-list (tree &optional ancestors)
   "get a list of (leaf (ancestors)) for all leaves in the tree"
   (if (atom tree)
       (list (cons tree (list ancestors)))
-      (mapcan #'(lambda (s) (ancestor-list s (cons (car tree) ancestors))) (cdr tree))))
+      (mappend #'(lambda (s) (ancestor-list s (cons (car tree) ancestors))) (cdr tree))))
 
 (defun has-internal-node? (tree node &optional exclude-root)
   (if exclude-root
@@ -221,7 +224,7 @@ yj                                (equalp 3)))))
   (leaves parse-tree))
 
 (defun words-from-forest (parse-trees)
-  (mapcan #'words-from-tree parse-trees))
+  (mappend #'words-from-tree parse-trees))
 
 (defun get-nps (parse-tree)
   "list of sub-trees within any noun-phrase in the parse-tree"
@@ -240,7 +243,7 @@ yj                                (equalp 3)))))
   (remove-if #'null (mapcar #'(lambda (forest) (remove-if 
 			      #'(lambda (word) (member word *words-to-remove*))
 					(words-from-forest forest)))
-	  (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list))))
+	  (mappend #'(lambda (scene) (mappend #'get-innermost-nps (scene-parse-forest scene))) scene-list))))
 
 ;;;; noun-phrase filtering
 (defun words-in-subject-filter (parse-tree)
@@ -345,7 +348,7 @@ yj                                (equalp 3)))))
 	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
 
 (defun read-scenes-all ()
-  (mapcan #'read-scenes-sequence
+  (mappend #'read-scenes-sequence
 	  (range 1 14)))			    
 
 (defun scene-lfs (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "responses.parsed"))
@@ -359,11 +362,11 @@ yj                                (equalp 3)))))
 (defun read-scene (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/"))
   (make-scene 
    :schematic (read-scene-schematic sequence-id scene-id base-path)
-   :parse-forest (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
+   :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id base-path))))
 
 (defun read-ground-scene (&optional (path "~/bolt_gt/dumps_raw/base_obj.parsed"))
   (make-scene
-   :parse-forest (mapcan #'cdr (read-lfs path))))
+   :parse-forest (mappend #'cdr (read-lfs path))))
 
 (defun camera (schematic)
   (car schematic))
@@ -393,7 +396,7 @@ yj                                (equalp 3)))))
 					(ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
   (let ((scene-classes 
 	 (mapcar #'(lambda (scene count)
-		     (nbc-class-from-feature-bag (mapcan #'words-in-subject-filter (scene-parse-forest scene))
+		     (nbc-class-from-feature-bag (mappend #'words-in-subject-filter (scene-parse-forest scene))
 						 :prior (/ 1 (if ground-scene 
 								 (1+ (length scene-list))
 								 (length scene-list)))
@@ -401,7 +404,7 @@ yj                                (equalp 3)))))
 						 :ht-skimming-fn ht-skimming-fn))
 		 scene-list (range 0 (1- (length scene-list))))))
     (if ground-scene
-	(cons (nbc-class-from-feature-bag (mapcan #'words-in-subject-filter (scene-parse-forest ground-scene))
+	(cons (nbc-class-from-feature-bag (mappend #'words-in-subject-filter (scene-parse-forest ground-scene))
 					  :prior (/ 1 (1+ (length scene-list)))
 					  :label (format nil "~A" 'ground))
 	      scene-classes)
@@ -410,7 +413,7 @@ yj                                (equalp 3)))))
 
 (defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
   "scene-key-fn should return a list of features from a schematic"
-  (let* ((scene-feature-list (mapcan #'(lambda (scene) 
+  (let* ((scene-feature-list (mappend #'(lambda (scene) 
 					(mapcar #'(lambda (feature) (cons feature scene))
 						(funcall schematic-key-fn (scene-schematic scene))))
 				    scene-list))
@@ -418,7 +421,7 @@ yj                                (equalp 3)))))
 	 (num-classifications (reduce #'+ (mapcar #'(lambda (feature-list) (length (cdr feature-list)))
 						  feature-partition))))
     (mapcar #'(lambda (feature-list)
-		(nbc-class-from-feature-bag (mapcan #'(lambda (scene) (mapcan parse-tree-winnowing-fn 
+		(nbc-class-from-feature-bag (mappend #'(lambda (scene) (mappend parse-tree-winnowing-fn 
 									      (scene-parse-forest scene))) 
 						    (cdr feature-list))
 					    :label (format nil "~A" (car feature-list))

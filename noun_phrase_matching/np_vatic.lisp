@@ -1,43 +1,17 @@
-;;;; file utilities
+;;;; logical form utilities
 (defun read-lfs (filename)
   "filename should be a file that contains a list of responses. Each response is also a list - the car is the original string, and the remaining elements are the parse trees returned by TRIPS for that string"
   (with-open-file (file filename)
     (read file nil)))
 
-(defun scene-lfs (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "responses.parsed"))
-  "load the logical forms from a given sequence and scene"
-  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename)))
-
-(defun read-scene-schematic (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "schematic.lisp"))
-  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
-    (read file nil)))
-
-(defun read-scene (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/"))
-  (make-scene 
-   :schematic (read-scene-schematic sequence-id scene-id base-path)
-   :parse-forest (mapcan #'cdr (scene-lfs sequence-id scene-id base-path))))
-
-(defun camera (schematic)
-  (car schematic))
-
-(defun objects (schematic)
-  (cdr schematic))
-
-(defun last-object (schematic)
-  (car (last (objects schematic))))
-
-(defun object-shape (object)
-  (cdr (assoc 'type object)))
-
-(defun object-color (object)
-  (cdr (assoc 'color (cdr (assoc 'settings object)))))
+(defun ground-lfs () (read-lfs "~/bolt_gt/dumps_raw/base_obj.parsed"))
 
 (defun export-nps (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "noun-phrases"))
   (let ((scene-lfs (scene-lfs sequence-id scene-id)))
     (with-open-file (stream (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) :direction :output :if-exists :supersede)
       (dolist (response-list scene-lfs)
 	(let* ((responses (cdr response-list))
-	       (nps (mapcan #'get-nps responses))
+	       (nps (mappend #'get-nps responses))
 	       (innermost-nps (remove-if #'(lambda (sexps) (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) nps))
 	       (word-list (mapcar #'(lambda (sexps) (words-from-forest sexps)) innermost-nps)))
 	  (print "new set")
@@ -49,36 +23,41 @@
 	  (print word-list)
 	  (print word-list stream))))))
 
+(defun sequence-length (sequence-index)
+  (ecase sequence-index
+    (1 2)
+    (2 3)
+    (3 4)
+    (4 5)
+    (5 3)
+    (6 3)
+    (7 4)
+    (8 6)
+    (9 3)
+    (10 5)
+    (11 2)
+    (12 5)
+    (13 3)
+    (14 8)))
+
 ;;;; general utilities
+(defun range (start end)
+  "list of ints from start to end, inclusive"
+  (if (> start end)
+      nil
+      (cons start (range (1+ start) end))))
 
 (defmacro while (test &rest body)
   `(do ()
        ((not ,test))
      ,@body))
 
-(defun comparator (test &optional (key #'identity))
-  "Comparison operator: auxilliary function used by EXTREMUM"
-  (declare (optimize (speed 3) (safety 0) (space 0) (debug 1)))
-  (lambda (a b) 
-    (let ((f_a (funcall key a))
-	  (f_b (funcall key b)))
-      (if (funcall test f_a f_b)
-	  (values a f_a)
-	  (values b f_b)))))
-
-(defun extremum (sequence predicate
-		  &key (key #'identity) (start 0) end)
-  "Returns the element of SEQUENCE that would appear first if the
-sequence were ordered according to SORT using PREDICATE and KEY using
-an unstable sorting algorithm. See http://www.cliki.net/EXTREMUM for
-the full specification."
-    (reduce (comparator predicate key) sequence
-	        :start start :end end))
-
-;(defun argmax (lst key)
-;  (extremum lst #'> :key key))
+(defun mappend (fn &rest lsts)
+  "non-destructive version of mapcan"
+  (apply #'append (apply #'mapcar fn lsts)))
 
 (defun argmax (lst key)
+  "max item in the list according to the key function"
   (let (max-item max-val)
     (dolist (x lst)
       (if (or (not max-val)
@@ -86,7 +65,10 @@ the full specification."
 	  (setf max-item x
 		max-val (funcall key x))))
     (values max-item max-val)))
-    
+
+(defun zip (&rest lists)
+  "like python's zip"
+  (apply #'mapcar #'list lists))
 
 (defun inclusion-exclusion? (lst one-of none-of)
   "return true iff the lst contain all the atoms in one-of and none of the atoms in none-of"
@@ -94,34 +76,48 @@ the full specification."
        (= (length (intersection none-of lst)) 0)))
 
 ;;;; statistics
+(defstruct distribution-parameters
+  n ; count
+  mean ; mean
+  sd ; standard deviation
+  )
+
 (defun mean (vals)
   (/ (reduce #'+ vals)
      (length vals)))
 
 (defun standard-deviation (vals &optional mean)
+  "if mean is passed, will use it in the calculation"
   (let ((m (or mean (mean vals))))
     (sqrt (/ (reduce #'+ (mapcar #'(lambda (v) (expt (- v m) 2))
 			      vals))
 	     (length vals)))))
 
 (defun standardize (vals &optional mean standard-deviation)
+  "if mean and standard-deviation are passed, will use them in the calculation"
   (let ((m (or mean 
 	       (mean vals)))
 	(sd (or standard-deviation 
 		(standard-deviation vals))))
-  (mapcar #'(lambda (v)
-	      (/ (- v m)
-		 sd))
-	  vals)))
+    (if (= sd 0) ; all values equal the mean
+	(mapcar #'(lambda (v) 
+		    v ; ignore
+		    0)
+		vals)
+	(mapcar #'(lambda (v)
+		    (/ (- v m)
+		       sd))
+		vals))))
 
 ;;;; hash-table utilities
-
 (defun hash-table->alist (ht)
+  "turn a hash table in to an association list"
   (let (alist)
     (maphash #'(lambda (key value) (setf alist (acons key value alist))) ht)
     alist))
 
 (defun alist->hash-table (alist)
+  "turn an alist into a hash table"
   (let ((ht (make-hash-table)))
     (dolist (pair alist)
       (destructuring-bind (key . value) pair
@@ -129,6 +125,7 @@ the full specification."
     ht))
 
 (defun sum-ht-values (ht)
+  "sum the values in a hash-table"
   (let ((sum 0))
     (maphash #'(lambda (key value)
 		 key ; ignore
@@ -137,11 +134,14 @@ the full specification."
     sum))
 
 (defun sort-alist-descending (alist)
+  "sort an alist by its values, descending"
   (sort alist #'> :key #'cdr))
 
 (defun sort-ht-descending (ht)
+  "sort a hash-table by its values, descending (returns an alist)"
   (sort-alist-descending (hash-table->alist ht)))
 
+; to let us see what's in a hash-table we print
 (set-pprint-dispatch 'hash-table
   (lambda (str ht)
     (format str "{~{~{~S => ~S~}~^ ~}}"
@@ -149,7 +149,9 @@ the full specification."
 			(list (car assoc-pair) (cdr assoc-pair)))
 		    (sort-ht-descending ht)))))
 
-(defun merge-hash-tables (&rest tables)
+
+(defun merge-hash-tables (tables)
+  "return a hash-table that has the union of the keys in its arguments. Don't expect any useful behavior for the values"
   "http://pleac.sourceforge.net/pleac_commonlisp/hashes.html"
   (let ((union
          (make-hash-table
@@ -167,6 +169,7 @@ the full specification."
     union))
 
 (defun skim-ht-mass (ht mass-to-retain)
+  "only keep keys with the largest values in ht, up to the fraction mass-to-retain of the original value sum"
   (let ((mass-sum (sum-ht-values ht)) 
 	(acc-mass 0)
 	(new-hash (make-hash-table)))
@@ -180,13 +183,13 @@ the full specification."
     new-hash))
 
 (defun skim-ht-threshold (ht min-value)
+  "only keep keys with values above min-value in ht"
   (let ((new-hash (make-hash-table)))
     (maphash #'(lambda (key value) (if (>= value min-value)
 				       (setf (gethash key new-hash)
 					     value)))
 	     ht)
     new-hash))
-
 
 ;;;; building distributions from lists of items
 (defun frequencies (word-list)
@@ -208,21 +211,21 @@ the full specification."
 (defun leaves (tree)
   "get a list of all leaves of a tree"
   (if (listp tree)
-      (mapcan #'leaves (cdr tree))
+      (mappend #'leaves (cdr tree))
       (list tree)))
 
 (defun find-children (tree parent-node)
   "get a list of all children of the parent-node in the tree. will match multiple if the parent-node appears multiple times"
   (if (listp tree)
       (if (eq (car tree) parent-node)
-	  (cons (cdr tree) (mapcan #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))
-	  (mapcan #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))))
+	  (cons (cdr tree) (mappend #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))
+	  (mappend #'(lambda (sub-tree) (find-children sub-tree parent-node)) (cdr tree)))))
 
 (defun ancestor-list (tree &optional ancestors)
   "get a list of (leaf (ancestors)) for all leaves in the tree"
   (if (atom tree)
       (list (cons tree (list ancestors)))
-      (mapcan #'(lambda (s) (ancestor-list s (cons (car tree) ancestors))) (cdr tree))))
+      (mappend #'(lambda (s) (ancestor-list s (cons (car tree) ancestors))) (cdr tree))))
 
 (defun has-internal-node? (tree node &optional exclude-root)
   (if exclude-root
@@ -231,17 +234,19 @@ the full specification."
 	  (or (eq (car tree) node)
 	      (some #'(lambda (s) (has-internal-node? s node)) (cdr tree))))))
 
-
 ;;;; parse-tree specific
 (defun words-from-tree (parse-tree)
   (leaves parse-tree))
 
 (defun words-from-forest (parse-trees)
-  (mapcan #'words-from-tree parse-trees))
+  (mappend #'words-from-tree parse-trees))
 
 (defun get-nps (parse-tree)
   "list of sub-trees within any noun-phrase in the parse-tree"
   (find-children parse-tree 'np))
+
+;(defparameter *words-to-remove* '(THE THERE A))
+(defparameter *words-to-remove* nil)
 
 (defun get-innermost-nps (parse-tree)
   "list of sub-trees within any innermost noun-phrase in the parse-tree"
@@ -249,6 +254,11 @@ the full specification."
 		 (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) 
 	     (get-nps parse-tree)))
 
+(defun all-innermost-nps (scene-list)
+  (remove-if #'null (mapcar #'(lambda (forest) (remove-if 
+			      #'(lambda (word) (member word *words-to-remove*))
+					(words-from-forest forest)))
+	  (mappend #'(lambda (scene) (mappend #'get-innermost-nps (scene-parse-forest scene))) scene-list))))
 
 ;;;; noun-phrase filtering
 (defun words-in-subject-filter (parse-tree)
@@ -256,16 +266,15 @@ the full specification."
    Useful in bootstrapping scenes to identify the object that was added -- this object is 
    generally the subject of the sentence"
   (let ((one-of  '(adjp np))
-	(none-of '(quan pred pp pro art advbl)))
-    (mapcar #'car (remove-if-not #'(lambda (leaf-ancestors-pair)
+	(none-of '(pred pp pro advbl)))
+    (remove-if #'(lambda (word) (member word *words-to-remove*)) (mapcar #'car (remove-if-not #'(lambda (leaf-ancestors-pair)
 				     (inclusion-exclusion? (cadr leaf-ancestors-pair) ; the ancestors list
 							   one-of
 							   none-of))
-				 (ancestor-list parse-tree)))))
+				 (ancestor-list parse-tree))))))
 
 (defun words-in-innermost-np (parse-tree)
   (words-from-forest (get-innermost-nps parse-tree)))
-
 
 ;;;; naive bayes classifier with additive smoothing
 (defun laplace-smoothed-probability (feature class-distribution size-of-feature-domain)
@@ -284,7 +293,6 @@ the full specification."
 		  :prior prior
 		  :label (or label feature-bag)))
 
-
 (defun nbc-score (feature-bag class-distribution class-prior size-of-feature-domain)
   "get the nbc score for a bag of features and the distribution for a given class
    feature-bag -- a list of features present in the instance we're classifying
@@ -301,7 +309,7 @@ the full specification."
 
 (defun nbc-score-feature-bag (feature-bag classes)
   (let ((size-of-feature-domain (hash-table-count
-				 (apply #'merge-hash-tables
+				 (funcall #'merge-hash-tables
 					(mapcar #'nbc-class-distribution classes)))))
     (mapcar #'(lambda (class) (nbc-score feature-bag
 					 (nbc-class-distribution class)
@@ -316,10 +324,12 @@ the full specification."
     (values (cdr max-class-score)
 	    (car max-class-score))))
 
+(defun nbc-classify-return-all (feature-bag classes &optional score-list)
+  (let* ((scores (or score-list (nbc-score-feature-bag feature-bag classes)))
+	 (classes-scores (mapcar #'cons scores (mapcar #'(lambda (class) (nbc-class-label class)) classes))))
+    (sort classes-scores #'> :key #'car)))
 
-;;;; in progress
-(defun ground-lfs () (read-lfs "~/bolt_gt/dumps_raw/base_obj.parsed"))
-
+#|
 (defun identify-nouns (sexp &rest classes)
   (if (listp sexp)
       (if (and (eq (car sexp) 'np)
@@ -328,138 +338,7 @@ the full specification."
 							  classes))))
 	  (cons (car sexp) (mapcar #'(lambda (s) (apply #'identify-nouns s classes)) (cdr sexp))))
       sexp))
-
-;(defun scene-parse-forest (scene-lfs)
-;  (mapcan #'cdr scene-lfs))
-
-(defun scene-class-all-words (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let ((word-bag (words-from-forest (scene-parse-forest scene-lfs))))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scenes-class-all-words (scene-lfs-list &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let ((word-bag (words-from-forest (mapcan #'scene-parse-forest scene-lfs-list))))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scene-class-all-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let* ((np-list (mapcan #'get-nps (scene-parse-forest scene-lfs)))
-	 (word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scenes-class-all-noun-phrases (scene-lfs-list &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-args
-  (let* ((np-list (mapcan #'get-nps (mapcan #'scene-parse-forest scene-lfs-list)))
-	(word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scene-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-arrgs
-  (let* ((np-list (mapcan #'get-innermost-nps (scene-parse-forest scene-lfs)))
-	 (word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scenes-class-innermost-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-arrgs
-  (let* ((np-list (mapcan #'get-innermost-nps (mapcan #'scene-parse-forest scene-lfs)))
-	 (word-bag (mapcan #'words-from-forest np-list)))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun scene-class-subject-noun-phrases (scene-lfs &rest key-args &key label prior)
-  label ; ignore, passed to class constructor through key-args
-  prior ; ignore, passed to class constructor through key-arrgs
-  (let ((word-bag (mapcan #'words-in-subject-filter (scene-parse-forest scene-lfs))))
-    (apply #'nbc-class-from-feature-bag word-bag key-args)))
-
-(defun reciprocal (x)
-  (/ 1 x))
-
-(defun foo-np (np &rest scene-lfs)
-  (let ((n -1))
-    (apply #'identify-nouns np 
-	   (mapcar #'(lambda (lfs) (scene-class-innermost-noun-phrases lfs
-								       :label (incf n)
-								       :prior (reciprocal (length scene-lfs))))
-		   scene-lfs))))
-
-(defun range (start end)
-  (if (> start end)
-      nil
-      (cons start (range (1+ start) end))))
-
-(defun object-class-features (sequence-index starting-scene-index ending-scene-index &key label prior class-fn)
-  label ; ignore
-  prior ;ignore
-  (funcall class-fn (mapcar #'(lambda (n) (scene-lfs sequence-index n))
-					       (range starting-scene-index ending-scene-index))
-				       :label label
-				       :prior prior))
-
-(defun sequence-length (sequence-index)
-  (ecase sequence-index
-    (1 2)
-    (2 3)
-    (3 4)
-    (4 5)
-    (5 3)
-    (6 3)
-    (7 4)
-    (8 6)
-    (9 3)
-    (10 5)
-    (11 2)
-    (12 5)
-    (13 3)
-    (14 8)))
-
-(defun classes-all-objects-all-scenes (&optional (class-fn #'scene-class-innermost-noun-phrases))
-  (mapcan #'(lambda (sequence-index)
-	      (let ((seq-len (sequence-length sequence-index)))
-		(mapcar #'(lambda (scene-index)
-			    (let ((class 
-			    (funcall #'object-class-features sequence-index scene-index
-								 (1- seq-len)
-								 :class-fn class-fn
-								 :label (format nil "~A ~A" sequence-index scene-index)
-								 ;:prior (/ (- seq-len scene-index) seq-len)))
-								 :prior 1)))
-;			      (setf (nbc-class-label class)(format nil "~A" (most-common-features-class class)))
-			      class))
-			(range 0 (1- seq-len)))))
-	  (range 1 14)))
-
-(defun classes-subject-isolation-all ()
-  (mapcan #'(lambda (sequence-index)
-	      (let ((seq-len (sequence-length sequence-index)))
-		(mapcar #'(lambda (scene-index)
-			    (let ((class
-			    (scene-class-subject-noun-phrases (scene-lfs sequence-index scene-index)
-							      :prior 1)))
-			      (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
-								       class)))
-			      class))
-			(range 0 (1- seq-len)))))
-	  (range 1 14)))
-
-(defun classes-subject-isolation-sequence (sequence-index &optional end-scene)
-  (let ((last-scene (or end-scene (1- (sequence-length sequence-index)))))
-    (cons (scene-class-all-words (ground-lfs) :label "(GROUND)"
-				  :prior 1)
-    (mapcar #'(lambda (scene-index)
-		(let ((class
-		       (scene-class-subject-noun-phrases (scene-lfs sequence-index scene-index)
-							 :prior 1)))
-		  (setf (nbc-class-label class)(format nil "~A" (most-common-features-class
-								 class)))
-		  class))
-	    (range 0 last-scene)))))
+|#
 
 (defun partition (sequence &key (key #'identity) (equivalence-test #'eq) (transform #'identity))
   (let (partitions)
@@ -471,23 +350,83 @@ the full specification."
 	    (setf partitions (cons (cons key (list (funcall transform elem))) partitions)))))
     partitions))
 
+;;;; scene functions
 (defstruct scene
     schematic
     parse-forest
- )
+    )
 
-
-(defun read-scenes-sequence (sequence-id)
+(defun read-scenes-sequence (sequence-id &optional num-to-read)
   (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id))
-	  (range 0 (1- (sequence-length sequence-id)))))
+	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
 
 (defun read-scenes-all ()
-  (mapcan #'read-scenes-sequence
+  (mappend #'read-scenes-sequence
 	  (range 1 14)))			    
 
-(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'identity))
+(defun scene-lfs (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "responses.parsed"))
+  "load the logical forms from a given sequence and scene"
+  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename)))
+
+(defun read-scene-schematic (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/") (filename "schematic.lisp"))
+  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
+    (read file nil)))
+
+(defun read-scene (sequence-id scene-id &optional (base-path "~/bolt_gt/dumps_raw/"))
+  (make-scene 
+   :schematic (read-scene-schematic sequence-id scene-id base-path)
+   :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id base-path))))
+
+(defun read-ground-scene (&optional (path "~/bolt_gt/dumps_raw/base_obj.parsed"))
+  (make-scene
+   :parse-forest (mappend #'cdr (read-lfs path))))
+
+(defun camera (schematic)
+  (car schematic))
+
+(defun objects (schematic)
+  (cdr schematic))
+
+(defun last-object (schematic)
+  (car (last (objects schematic))))
+
+(defun object-shape (object)
+  (cdr (assoc 'type object)))
+
+(defun object-color (object)
+  (cdr (assoc 'color (cdr (assoc 'settings object)))))
+
+;;;; training functions: take a scene list. for each scene, 
+;;;; extract words from all response parse trees according 
+;;;; to a parse tree winnowing function, then generate a 
+;;;; class for each scene using these words as a bag of 
+;;;; features. Labels and creates a prior for each class 
+;;;; too, this behavior varies from function to function
+
+(defparameter *ht-min-threshold* 1)
+
+(defun train-classes-subject-isolation (scene-list &key ground-scene 
+					(ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
+  (let ((scene-classes 
+	 (mapcar #'(lambda (scene count)
+		     (nbc-class-from-feature-bag (mappend #'words-in-subject-filter (scene-parse-forest scene))
+						 :prior (/ 1 (if ground-scene 
+								 (1+ (length scene-list))
+								 (length scene-list)))
+						 :label (format nil "~A" count)
+						 :ht-skimming-fn ht-skimming-fn))
+		 scene-list (range 0 (1- (length scene-list))))))
+    (if ground-scene
+	(cons (nbc-class-from-feature-bag (mappend #'words-in-subject-filter (scene-parse-forest ground-scene))
+					  :prior (/ 1 (1+ (length scene-list)))
+					  :label (format nil "~A" 'ground))
+	      scene-classes)
+	scene-classes)))
+
+
+(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
   "scene-key-fn should return a list of features from a schematic"
-  (let* ((scene-feature-list (mapcan #'(lambda (scene) 
+  (let* ((scene-feature-list (mappend #'(lambda (scene) 
 					(mapcar #'(lambda (feature) (cons feature scene))
 						(funcall schematic-key-fn (scene-schematic scene))))
 				    scene-list))
@@ -495,7 +434,7 @@ the full specification."
 	 (num-classifications (reduce #'+ (mapcar #'(lambda (feature-list) (length (cdr feature-list)))
 						  feature-partition))))
     (mapcar #'(lambda (feature-list)
-		(nbc-class-from-feature-bag (mapcan #'(lambda (scene) (mapcan parse-tree-winnowing-fn 
+		(nbc-class-from-feature-bag (mappend #'(lambda (scene) (mappend parse-tree-winnowing-fn 
 									      (scene-parse-forest scene))) 
 						    (cdr feature-list))
 					    :label (format nil "~A" (car feature-list))
@@ -505,76 +444,67 @@ the full specification."
 	    
 	    feature-partition)))
 
-(defun train-classes-shape-subject (scene-list &optional (mass-to-retain 1))
+
+(defun train-classes-shape-subject (scene-list)
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-subject-filter
 			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-shape (last-object scm))))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+						  (list (object-shape (last-object scm))))))
 
-(defun train-classes-color-all (scene-list &optional (mass-to-retain 1))
+(defun train-classes-color-all (scene-list)
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-innermost-np
 			    :schematic-key-fn #'(lambda (scm)
-						  (mapcar #'object-color (objects scm)))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
+						  (mapcar #'object-color (objects scm)))))
 
-(defun train-classes-shape-all (scene-list &optional (mass-to-retain 1))
-  (train-classes-by-feature scene-list 
-			    :parse-tree-winnowing-fn #'words-in-innermost-np
-			    :schematic-key-fn #'(lambda (scm)
-						  (mapcar #'object-shape (objects scm)))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))n
-
-(defun train-classes-color-subject (scene-list &optional (mass-to-retain 1))
+(defun train-classes-color-subject (scene-list)
   (train-classes-by-feature scene-list 
 			    :parse-tree-winnowing-fn #'words-in-subject-filter
 			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-color (last-object scm))))
-			    :ht-skimming-fn #'(lambda (ht) (skim-ht-mass ht mass-to-retain))))
-      
+						  (list (object-color (last-object scm))))))
+
+(defun train-classes-shape-all (scene-list)
+  (train-classes-by-feature scene-list 
+			    :parse-tree-winnowing-fn #'words-in-innermost-np
+			    :schematic-key-fn #'(lambda (scm)
+						  (mapcar #'object-shape (objects scm)))))
+
 (defun most-common-features-class (class &optional (n 3))
   (reverse (mapcar #'car (last (reverse (sort-ht-descending (nbc-class-distribution class))) n))))
 
+#|
 (defun identify-nouns-in-parse-forest (parse-forest &rest classes)
   (mapcar #'(lambda (pt) (apply #'identify-nouns pt classes)) parse-forest))
+|#
 
-(defun foo-all-objects-all-scenes (sequence-index scene-index &optional (class-fn #'scene-class-innermost-noun-phrases))
-  (let ((classes (classes-all-objects-all-scenes class-fn)))
-    (mapcar #'words-from-tree (apply #'identify-nouns-in-parse-forest (scene-parse-forest (scene-lfs sequence-index scene-index))
-				     classes))))
-
-(defun foo-subject-isolation (sequence-index scene-index)
-  (mapcar #'words-from-tree (apply #'identify-nouns-in-parse-forest (scene-parse-forest (scene-lfs sequence-index scene-index))
-				   (classes-subject-isolation-sequence sequence-index scene-index))))
-
-(defun all-innermost-nps (&rest scene-list)
-  (mapcar #'words-from-forest (mapcan #'(lambda (scene) (mapcan #'get-innermost-nps (scene-parse-forest scene))) scene-list)))
-
-
-(defstruct distribution-parameters
-  n
-  mean
-  sd
-  )
-
-(defun classify-threshold-with-parameters (feature-bag distribution-parameters &rest classes)
+(defun classify-threshold-with-parameters (feature-bag distribution-parameters classes)
   (let* ((sd (distribution-parameters-sd distribution-parameters))
 	 (mean (distribution-parameters-mean distribution-parameters))
 	 (raw-scores (nbc-score-feature-bag feature-bag classes))
 	 (std-scores (standardize raw-scores mean sd)))
-    (if (find-if #'(lambda (n) (> n 0)) std-scores)
-	(nbc-classify feature-bag classes raw-scores)
-	(values nil (cadr (multiple-value-list (nbc-classify feature-bag classes raw-scores)))))))
+    (if (find-if #'(lambda (n) (>= n 0)) std-scores)
+	(nbc-classify feature-bag classes std-scores)
+	(apply #'values nil (multiple-value-list (nbc-classify feature-bag classes std-scores))))))
 
-(defun classify-threshold (feature-bag model-distribution-parameters &rest classes)
-  (apply #'classify-threshold-with-parameters feature-bag (cdr (assoc (length feature-bag)
+(defun classify-threshold (feature-bag model-distribution-parameters classes)
+  (classify-threshold-with-parameters feature-bag (cdr (assoc (length feature-bag)
 								      model-distribution-parameters))
 	 classes))
-  
-  
 
-(defun model-distribution-parameters-by-length (feature-bag-list &rest classes)
+(defun classify-threshold-with-parameters-return-all (feature-bag distribution-parameters classes)
+  (let* ((sd (distribution-parameters-sd distribution-parameters))
+	 (mean (distribution-parameters-mean distribution-parameters))
+	 (raw-scores (nbc-score-feature-bag feature-bag classes))
+	 (std-scores (standardize raw-scores mean sd)))
+    (nbc-classify-return-all feature-bag classes std-scores)))
+
+(defun classify-threshold-return-all (feature-bag model-distribution-parameters classes)
+  (classify-threshold-with-parameters-return-all feature-bag (cdr (assoc (length feature-bag)
+								      model-distribution-parameters))
+	 classes))
+
+;;;; calculate model distributions
+(defun model-distribution-parameters-by-length (feature-bag-list classes)
   (let ((by-length (partition feature-bag-list :key #'length)))
     (mapcar #'(lambda (pair)
 		(let* ((length (car pair))
@@ -587,10 +517,14 @@ the full specification."
 			 :mean (mean flattened)
 			 :sd (standard-deviation flattened)
 			 :n n))))
-    by-length)))
+	    by-length)))
 
-(defun model-distribution-parameters (training-fn &optional (feature-extraction-fn #'all-innermost-nps))
-  (apply #'model-distribution-parameters-by-length (apply feature-extraction-fn (read-scenes-all)) (funcall training-fn (read-scenes-all))))
+(defun model-distribution-parameters (training-fn &key (feature-extraction-fn #'all-innermost-nps) 
+				      (classification-scenes (read-scenes-all)) 
+				      (training-scenes (read-scenes-all)))
+  (model-distribution-parameters-by-length 
+	 (funcall feature-extraction-fn classification-scenes)
+	 (funcall training-fn training-scenes)))
 
 (defun shape-distribution-subject ()
   (model-distribution-parameters #'train-classes-shape-subject))
@@ -603,7 +537,64 @@ the full specification."
 
 (defun shape-distribution-all ()
   (model-distribution-parameters #'train-classes-shape-all))
-			      
-(defun foo (feature-bag &rest classes)
-  (mapcar #'(lambda (a b) (list feature-bag a b))
-	  (identity (nbc-score-feature-bag feature-bag classes)) (mapcar #'nbc-class-label classes)))
+
+(defun object-distribution (training-scenes classification-scenes)
+  (model-distribution-parameters #'train-classes-subject-isolation
+				 :training-scenes training-scenes 
+				 :classification-scenes classification-scenes))
+
+(defun train-and-classify (training-fn &key 
+			   (training-scenes (read-scenes-all))
+			   (classification-scenes (read-scenes-all))
+			   (feature-extraction-fn #'all-innermost-nps))
+  (let* ((classification-features (funcall feature-extraction-fn classification-scenes))
+	 (classes (funcall training-fn training-scenes))
+	 (dist-params (model-distribution-parameters training-fn
+						     :feature-extraction-fn
+						     feature-extraction-fn
+						     :classification-scenes 
+						     classification-scenes
+						     :training-scenes
+						     training-scenes)))
+    (zip classification-features
+	 (mapcar #'(lambda (fb) (multiple-value-list
+				 (funcall #'classify-threshold fb dist-params classes)))
+		 classification-features))))
+
+(defun train-and-classify-return-all (training-fn &key 
+				      (training-scenes (read-scenes-all))
+				      (classification-scenes (read-scenes-all))
+				      (feature-extraction-fn #'all-innermost-nps))
+  (let* ((classification-features (funcall feature-extraction-fn classification-scenes))
+	 (classes (funcall training-fn training-scenes))
+	 (dist-params (model-distribution-parameters training-fn
+						     :feature-extraction-fn
+						     feature-extraction-fn
+						     :classification-scenes 
+						     classification-scenes
+						     :training-scenes
+						     training-scenes)))
+    (zip classification-features
+	 (mapcar #'(lambda (fb)
+		     (funcall #'classify-threshold-return-all fb dist-params classes))
+		 classification-features))))
+
+
+(defun display-t-and-c-list (list)
+  (dolist (elem list)
+    (print (format nil "nounp: ~A" (car elem)))
+    (if (null (caadr elem))
+	(progn 
+	  (pprint "no class match above mean")
+	  (pprint (format nil "class: ~A" (nbc-class-label (second (cadr elem)))))
+	  (pprint (format nil "std posterior: ~A" (car (last (cadr elem))))))
+	(progn
+	  (pprint (format nil "class: ~A" (nbc-class-label (caadr elem))))
+	  (pprint (format nil "std posterior: ~A" (car (last (cadr elem)))))))
+    (terpri)))
+
+;;;; stuff for vatic
+(defun nbc-class-from-feature-alist (feature-alist &key label (prior 1) (ht-skimming-fn #'identity))
+  (make-nbc-class :distribution (funcall ht-skimming-fn (alist->hash-table feature-alist))
+		  :prior prior
+		  :label (or label feature-alist)))
