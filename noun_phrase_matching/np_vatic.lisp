@@ -151,8 +151,8 @@
 
 
 (defun merge-hash-tables (tables)
-  "return a hash-table that has the union of the keys in its arguments. Don't expect any useful behavior for the values"
-  "http://pleac.sourceforge.net/pleac_commonlisp/hashes.html"
+  "return a hash-table that has the union of the keys in its arguments. Don't expect any useful behavior for the values
+  http://pleac.sourceforge.net/pleac_commonlisp/hashes.html"
   (let ((union
          (make-hash-table
           :test (first
