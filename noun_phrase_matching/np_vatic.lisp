@@ -14,7 +14,7 @@
   (format nil "~A~A/~A/responses.json" *responses-path* sequence scene))
 
 (defun responses (sequence scene)
-  (json:decode-json (open (responses-path sequence scene))))
+  (mapcar #'response-from-json (json:decode-json (open (responses-path sequence scene)))))
 
 (defstruct (response
 	     (:print-function 
@@ -90,6 +90,11 @@
         while (funcall pred x)
         collect x))
 
+(defstruct partition
+  key
+  values
+)
+
 (defun partition-by (f seq &key (equality #'equal))
   ; applies f to each item in seq, splitting it each time f returns a new value
   (when seq
@@ -98,7 +103,9 @@
 	   (ptr seq))
       (while (and ptr (funcall equality fv (funcall f (car ptr))))
 	(push (pop ptr) acc))
-      (cons acc (partition-by f ptr)))))
+      (cons (make-partition :key fv
+			    :values acc)
+	    (partition-by f ptr)))))
 
 (defun range (start end)
   "list of ints from start to end, inclusive"
@@ -657,12 +664,65 @@
 
 ;;;; evaluation
 
+(defstruct object-reference
+  binding ; object referred to 
+  words ; a list of symbols, not strings
+)
+    
 (defun group-response-words-by-object (resp)
-  (mapcar (lambda (partition) 
-	    (cons (response-word-object-binding (car partition))
-				    partition))
-	  (partition-by #'response-word-object-binding (response-word-list resp))))
+  (remove-if-not #'object-reference-binding
+		 (mapcar (lambda (partition) 
+			   (make-object-reference
+			    :binding (partition-key partition)
+			    :words (mapcar (lambda (response-word)
+					     (intern (string-upcase (response-word-text response-word))))
+					   (partition-values partition))))
+			 (partition-by #'response-word-object-binding (response-word-list resp)))))
 
+
+(defun proof (sequence scene)
+  (let* ((feature-extraction-fn #'all-innermost-nps)
+	 (training-fn #'train-classes-subject-isolation)
+	 (training-scenes (read-scenes-sequence sequence (1+ scene)))
+	 (classification-scenes (list (read-scene sequence scene)))
+	 (classes (funcall training-fn training-scenes))
+	 (dist-params (model-distribution-parameters training-fn
+						     :feature-extraction-fn
+						     feature-extraction-fn
+						     :classification-scenes 
+						     classification-scenes
+						     :training-scenes
+						     training-scenes))
+	 (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
+	 (match-count 0))
+    (dolist (object-reference goldstandard)
+      (let ((classification (nbc-classify(object-reference-words object-reference)
+					;	dist-params
+						classes)))
+	
+#|	(format t "~A (~A) -> ~A~%"
+		(object-reference-words object-reference)
+		(object-reference-binding object-reference)
+		(if classification (nbc-class-label classification)))
+|#
+	(if (and classification (= (parse-integer (nbc-class-label classification))
+					    (object-reference-binding object-reference)))
+	    (incf match-count))))
+    (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene match-count (length goldstandard)
+	    (/ match-count (length goldstandard)))
+    (values match-count (length goldstandard))))
+
+(defun proof-all ()
+    (let ((matched 0)
+	  (total 0))
+    (dolist (sequence (range 1 14))
+      (dolist (scene (range 0 (1- (sequence-length sequence))))
+	(multiple-value-bind (this-match this-total) (proof sequence scene)
+	  (incf matched this-match)
+	  (incf total this-total))))
+    (format t "~A of ~A (~$) overall" matched total (/ matched total))
+    (values matched total)))
+	      
 ;;;; stuff for vatic
 (defun nbc-class-from-feature-alist (feature-alist &key label (prior 1) (ht-skimming-fn #'identity))
   (make-nbc-class :distribution (funcall ht-skimming-fn (alist->hash-table feature-alist))
