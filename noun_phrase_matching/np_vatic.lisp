@@ -480,13 +480,13 @@
 						 :prior (/ 1 (if ground-scene 
 								 (1+ (length scene-list))
 								 (length scene-list)))
-						 :label (format nil "~A" count)
+						 :label count
 						 :ht-skimming-fn ht-skimming-fn))
 		 scene-list (range 0 (1- (length scene-list))))))
     (if ground-scene
 	(cons (nbc-class-from-feature-bag (mappend #'words-in-subject-filter (scene-parse-forest ground-scene))
 					  :prior (/ 1 (1+ (length scene-list)))
-					  :label (format nil "~A" 'ground))
+					  :label 'ground)
 	      scene-classes)
 	scene-classes)))
 
@@ -682,7 +682,7 @@
 
 (defun proof (sequence scene)
   (let* ((feature-extraction-fn #'all-innermost-nps)
-	 (training-fn #'train-classes-subject-isolation)
+	 (training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
 	 (training-scenes (read-scenes-sequence sequence (1+ scene)))
 	 (classification-scenes (list (read-scene sequence scene)))
 	 (classes (funcall training-fn training-scenes))
@@ -696,8 +696,8 @@
 	 (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
 	 (match-count 0))
     (dolist (object-reference goldstandard)
-      (let ((classification (nbc-classify(object-reference-words object-reference)
-					;	dist-params
+      (let ((classification (nbc-classify (object-reference-words object-reference)
+;						dist-params
 						classes)))
 	
 #|	(format t "~A (~A) -> ~A~%"
@@ -705,8 +705,8 @@
 		(object-reference-binding object-reference)
 		(if classification (nbc-class-label classification)))
 |#
-	(if (and classification (= (parse-integer (nbc-class-label classification))
-					    (object-reference-binding object-reference)))
+	(if (and classification (eq (nbc-class-label classification)
+				    (object-reference-binding object-reference)))
 	    (incf match-count))))
     (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene match-count (length goldstandard)
 	    (/ match-count (length goldstandard)))
