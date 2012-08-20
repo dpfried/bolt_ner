@@ -331,13 +331,14 @@
   "return a list of the words that appear to be in a subject noun-phrase of the parse-tree. 
    Useful in bootstrapping scenes to identify the object that was added -- this object is 
    generally the subject of the sentence"
-  (let ((one-of  '(adjp np))
-	(none-of '(pred pp pro advbl)))
-    (remove-if #'(lambda (word) (member word *words-to-remove*)) (mapcar #'car (remove-if-not #'(lambda (leaf-ancestors-pair)
-												  (inclusion-exclusion? (cadr leaf-ancestors-pair) ; the ancestors list
-															one-of
-															none-of))
-											      (ancestor-list parse-tree))))))
+  (let ((one-of  '(np adjp))
+	(none-of '(pp advbl)))
+    (remove-if #'(lambda (word) (member word *words-to-remove*)) 
+	       (mapcar #'car (remove-if-not #'(lambda (leaf-ancestors-pair)
+						(inclusion-exclusion? (cadr leaf-ancestors-pair) ; the ancestors list
+								      one-of
+								      none-of))
+					    (ancestor-list parse-tree))))))
 
 (defun words-in-innermost-np (parse-tree)
   (words-from-forest (get-innermost-nps parse-tree)))
@@ -680,7 +681,7 @@
 			 (partition-by #'response-word-object-binding (response-word-list resp)))))
 
 
-(defun proof (sequence scene)
+(defun proof (sequence scene &key (discount-most-recent nil) (verbose nil))
   (let* ((feature-extraction-fn #'all-innermost-nps)
 	 (training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
 	 (training-scenes (read-scenes-sequence sequence (1+ scene)))
@@ -694,30 +695,33 @@
 						     :training-scenes
 						     training-scenes))
 	 (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
-	 (match-count 0))
+	 (match-count 0)
+	 (total-count 0))
     (dolist (object-reference goldstandard)
-      (let ((classification (nbc-classify (object-reference-words object-reference)
-;						dist-params
-						classes)))
-	
-#|	(format t "~A (~A) -> ~A~%"
-		(object-reference-words object-reference)
-		(object-reference-binding object-reference)
-		(if classification (nbc-class-label classification)))
-|#
-	(if (and classification (eq (nbc-class-label classification)
-				    (object-reference-binding object-reference)))
-	    (incf match-count))))
-    (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene match-count (length goldstandard)
-	    (/ match-count (length goldstandard)))
-    (values match-count (length goldstandard))))
+      (unless (and discount-most-recent (= (object-reference-binding object-reference)
+					   scene))
+	(let ((classification (nbc-classify (object-reference-words object-reference)
+;					    dist-params
+					    classes)))
+	  (if verbose
+	      (format t "~A (~A) -> ~A~%"
+		      (object-reference-words object-reference)
+		      (object-reference-binding object-reference)
+		      (if classification (nbc-class-label classification))))
+	  (if (and classification (eq (nbc-class-label classification)
+				      (object-reference-binding object-reference)))
+	      (incf match-count)))
+	(incf total-count)))
+    (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene match-count total-count
+	    (if (= total-count 0) "--" (/ match-count total-count)))
+    (values match-count total-count)))
 
-(defun proof-all ()
+(defun proof-all (&key (discount-most-recent nil) (verbose nil))
     (let ((matched 0)
 	  (total 0))
     (dolist (sequence (range 1 14))
       (dolist (scene (range 0 (1- (sequence-length sequence))))
-	(multiple-value-bind (this-match this-total) (proof sequence scene)
+	(multiple-value-bind (this-match this-total) (proof sequence scene :discount-most-recent discount-most-recent :verbose verbose)
 	  (incf matched this-match)
 	  (incf total this-total))))
     (format t "~A of ~A (~$) overall" matched total (/ matched total))
