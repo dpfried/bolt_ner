@@ -1,10 +1,20 @@
 (ql:quickload "cl-json")
 
 ;;;; logical form utilities
-(defun read-lfs (filename)
+(defun read-lfs (filename &key (sampling-rate 1) seed)
   "filename should be a file that contains a list of responses. Each response is also a list - the car is the original string, and the remaining elements are the parse trees returned by TRIPS for that string"
   (with-open-file (file filename)
-    (read file nil)))
+    (sample (read file nil) sampling-rate :seed seed)))
+
+(defun sample (lst sampling-rate &key seed)
+  (let ((rs (if seed 
+		(seed-random-state seed)
+		*random-state*)))
+  (remove-if (lambda (e)
+	       (declare (ignore e))
+	       (> (random 1.0 rs) sampling-rate))
+	     lst)))
+	       
 
 (defparameter *base-path* "~/bolt_gt/dumps_raw/")
 
@@ -45,7 +55,9 @@
   (make-response-word :text (lookup json :word)
 	     :object-binding (lookup json :object--binding)))
 
-(defun ground-lfs () (read-lfs (format nil "~A~A" *base-path* "base_obj.parsed")))
+(defun ground-lfs (&key :sampling-rate :seed) 
+  (read-lfs (format nil "~A~A" *base-path* "base_obj.parsed") 
+	    :sampling-rate sampling-rate :seed seed))
 
 (defun export-nps (sequence-id scene-id &optional (base-path *base-path*) (filename "noun-phrases"))
   (let ((scene-lfs (scene-lfs sequence-id scene-id)))
@@ -96,11 +108,11 @@
 )
 
 (defun partition-by (f seq &key (equality #'equal))
-  ; applies f to each item in seq, splitting it each time f returns a new value
+  "applies f to each item in seq, splitting it each time f returns a new value"
   (when seq
     (let* ((fv (funcall f (car seq)))
-	   acc
-	   (ptr seq))
+	   (ptr seq)
+	   acc)
       (while (and ptr (funcall equality fv (funcall f (car ptr))))
 	(push (pop ptr) acc))
       (cons (make-partition :key fv
@@ -423,26 +435,29 @@
   parse-forest
   )
 
-(defun read-scenes-sequence (sequence-id &optional num-to-read)
-  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id))
+(defun read-scenes-sequence (sequence-id &key num-to-read (sampling-rate 1))
+  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id :sampling-rate sampling-rate))
 	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
 
-(defun read-scenes-all ()
-  (mappend #'read-scenes-sequence
-	   (range 1 14)))			    
+(defun read-scenes-all (&key (sampling-rate 1))
+  (mappend (lambda (sequence-num) (read-scenes-sequence sequence-num :sampling-rate sampling-rate))
+	   (range 1 14)))
 
-(defun scene-lfs (sequence-id scene-id &optional (base-path *base-path*) (filename "responses.parsed"))
+(defun scene-lfs (sequence-id scene-id &key (base-path *base-path*) (filename "responses.parsed") (sampling-rate 1))
   "load the logical forms from a given sequence and scene"
-  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename)))
+  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) 
+	    :sampling-rate sampling-rate))
 
 (defun read-scene-schematic (sequence-id scene-id &optional (base-path *base-path*) (filename "schematic.lisp"))
   (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
     (read file nil)))
 
-(defun read-scene (sequence-id scene-id &optional (base-path *base-path*))
-  (make-scene 
+(defun read-scene (sequence-id scene-id &key (sampling-rate 1) (base-path *base-path*))
+  (make-scene
    :schematic (read-scene-schematic sequence-id scene-id base-path)
-   :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id base-path))))
+   :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id 
+					   :base-path base-path 
+					   :sampling-rate sampling-rate))))
 
 (defun read-ground-scene (&optional path)
   (setf path (or path (format nil "~A~A" *base-path* "base_obj.parsed")))
@@ -682,18 +697,9 @@
 
 
 (defun proof (sequence scene &key (discount-most-recent nil) (verbose nil))
-  (let* ((feature-extraction-fn #'all-innermost-nps)
-	 (training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
-	 (training-scenes (read-scenes-sequence sequence (1+ scene)))
-	 (classification-scenes (list (read-scene sequence scene)))
+  (let* ((training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
+	 (training-scenes (read-scenes-sequence sequence :num-to-read (1+ scene)))
 	 (classes (funcall training-fn training-scenes))
-	 (dist-params (model-distribution-parameters training-fn
-						     :feature-extraction-fn
-						     feature-extraction-fn
-						     :classification-scenes 
-						     classification-scenes
-						     :training-scenes
-						     training-scenes))
 	 (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
 	 (match-count 0)
 	 (total-count 0))
@@ -701,7 +707,6 @@
       (unless (and discount-most-recent (= (object-reference-binding object-reference)
 					   scene))
 	(let ((classification (nbc-classify (object-reference-words object-reference)
-;					    dist-params
 					    classes)))
 	  (if verbose
 	      (format t "~A (~A) -> ~A~%"
