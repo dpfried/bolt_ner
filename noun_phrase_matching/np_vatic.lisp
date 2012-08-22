@@ -750,6 +750,11 @@
 		  :prior prior
 		  :label (or label feature-alist)))
 
+;; in progress
+
+(defun learning-curve ()
+  (mapcar (lambda (sr) (proof-all :verbose t :discount-most-recent t :seed 123 :sampling-rate sr)) (range 0 1 (/ 1 10))))
+
 (defun series-graph (x y)
 	   (let* ((b (cl-plplot:new-x-y-plot x y))
 		  (w (cl-plplot:basic-window)))
