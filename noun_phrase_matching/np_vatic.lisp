@@ -1,4 +1,5 @@
 (ql:quickload "cl-json")
+(ql:quickload "cl-plplot")
 
 ;;;; logical form utilities
 (defun read-lfs (filename &key (sampling-rate 1) seed)
@@ -121,11 +122,11 @@
 			    :values acc)
 	    (partition-by f ptr)))))
 
-(defun range (start end)
+(defun range (start end &optional (step 1))
   "list of ints from start to end, inclusive"
   (if (> start end)
       nil
-      (cons start (range (1+ start) end))))
+      (cons start (range (+ start step) end step))))
 
 (defmacro while (test &rest body)
   `(do ()
@@ -748,3 +749,9 @@
   (make-nbc-class :distribution (funcall ht-skimming-fn (alist->hash-table feature-alist))
 		  :prior prior
 		  :label (or label feature-alist)))
+
+(defun series-graph (x y)
+	   (let* ((b (cl-plplot:new-x-y-plot x y))
+		  (w (cl-plplot:basic-window)))
+	     (cl-plplot:add-plot-to-window w b)
+	     (cl-plplot:render w "png" :filename "/tmp/file.png")))
