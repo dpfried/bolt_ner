@@ -368,6 +368,7 @@
   label ; can be anything
   distribution ; a hash table of frequencies
   prior ; a number, the prior probability
+  training-instances ; an integer
   )
 
 (defun nbc-class-from-feature-bag (feature-bag &key label (prior 1) (ht-skimming-fn #'identity))
@@ -755,8 +756,13 @@
 (defun learning-curve ()
   (mapcar (lambda (sr) (proof-all :verbose t :discount-most-recent t :seed 123 :sampling-rate sr)) (range 0 1 (/ 1 10))))
 
-(defun series-graph (x y)
-	   (let* ((b (cl-plplot:new-x-y-plot x y))
-		  (w (cl-plplot:basic-window)))
-	     (cl-plplot:add-plot-to-window w b)
-	     (cl-plplot:render w "png" :filename "/tmp/file.png")))
+(defun series-graph (x y &optional window)
+	   (let* ((xa (map 'vector #'identity x))
+		  (ya (map 'vector #'identity y))
+		  (yb (map 'vector (lambda (x) (* x 2)) y))
+		  (ba (cl-plplot:new-x-y-plot xa ya))
+		  (bb (cl-plplot:new-x-y-plot xa yb))
+		  (w (or window (cl-plplot:basic-window))))
+	     (cl-plplot:add-plot-to-window w ba)
+	     (cl-plplot:add-plot-to-window w bb)
+	     (cl-plplot:render w "tk")))
