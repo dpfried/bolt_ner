@@ -55,9 +55,11 @@
   (make-response-word :text (lookup json :word)
 	     :object-binding (lookup json :object--binding)))
 
+#|
 (defun ground-lfs (&key :sampling-rate :seed) 
   (read-lfs (format nil "~A~A" *base-path* "base_obj.parsed") 
 	    :sampling-rate sampling-rate :seed seed))
+|#
 
 (defun export-nps (sequence-id scene-id &optional (base-path *base-path*) (filename "noun-phrases"))
   (let ((scene-lfs (scene-lfs sequence-id scene-id)))
@@ -435,29 +437,30 @@
   parse-forest
   )
 
-(defun read-scenes-sequence (sequence-id &key num-to-read (sampling-rate 1))
-  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id :sampling-rate sampling-rate))
+(defun read-scenes-sequence (sequence-id &key num-to-read (sampling-rate 1) seed)
+  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id :sampling-rate sampling-rate :seed seed))
 	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
 
-(defun read-scenes-all (&key (sampling-rate 1))
-  (mappend (lambda (sequence-num) (read-scenes-sequence sequence-num :sampling-rate sampling-rate))
+(defun read-scenes-all (&key (sampling-rate 1) seed)
+  (mappend (lambda (sequence-num) (read-scenes-sequence sequence-num :sampling-rate sampling-rate :seed seed))
 	   (range 1 14)))
 
-(defun scene-lfs (sequence-id scene-id &key (base-path *base-path*) (filename "responses.parsed") (sampling-rate 1))
+(defun scene-lfs (sequence-id scene-id &key (base-path *base-path*) (filename "responses.parsed") (sampling-rate 1) seed)
   "load the logical forms from a given sequence and scene"
   (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) 
-	    :sampling-rate sampling-rate))
+	    :sampling-rate sampling-rate :seed seed))
 
 (defun read-scene-schematic (sequence-id scene-id &optional (base-path *base-path*) (filename "schematic.lisp"))
   (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
     (read file nil)))
 
-(defun read-scene (sequence-id scene-id &key (sampling-rate 1) (base-path *base-path*))
+(defun read-scene (sequence-id scene-id &key (sampling-rate 1) (base-path *base-path*) seed)
   (make-scene
    :schematic (read-scene-schematic sequence-id scene-id base-path)
    :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id 
 					   :base-path base-path 
-					   :sampling-rate sampling-rate))))
+					   :sampling-rate sampling-rate
+					   :seed seed))))
 
 (defun read-ground-scene (&optional path)
   (setf path (or path (format nil "~A~A" *base-path* "base_obj.parsed")))
@@ -696,9 +699,12 @@
 			 (partition-by #'response-word-object-binding (response-word-list resp)))))
 
 
-(defun proof (sequence scene &key (discount-most-recent nil) (verbose nil))
+(defun proof (sequence scene &key (discount-most-recent nil) (verbose nil) (sampling-rate 1) seed)
   (let* ((training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
-	 (training-scenes (read-scenes-sequence sequence :num-to-read (1+ scene)))
+	 (training-scenes (read-scenes-sequence sequence 
+						:num-to-read (1+ scene)
+						:sampling-rate sampling-rate
+						:seed seed))
 	 (classes (funcall training-fn training-scenes))
 	 (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
 	 (match-count 0)
@@ -721,12 +727,17 @@
 	    (if (= total-count 0) "--" (/ match-count total-count)))
     (values match-count total-count)))
 
-(defun proof-all (&key (discount-most-recent nil) (verbose nil))
+(defun proof-all (&key (discount-most-recent nil) (verbose nil) (sampling-rate 1) seed)
     (let ((matched 0)
 	  (total 0))
     (dolist (sequence (range 1 14))
       (dolist (scene (range 0 (1- (sequence-length sequence))))
-	(multiple-value-bind (this-match this-total) (proof sequence scene :discount-most-recent discount-most-recent :verbose verbose)
+	(multiple-value-bind (this-match this-total) 
+	    (proof sequence scene 
+		   :discount-most-recent discount-most-recent
+		   :verbose verbose
+		   :sampling-rate sampling-rate
+		   :seed seed)
 	  (incf matched this-match)
 	  (incf total this-total))))
     (format t "~A of ~A (~$) overall" matched total (/ matched total))
