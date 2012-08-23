@@ -97,6 +97,15 @@
     (14 8)))
 
 ;;;; general utilities
+(defun weighted-avg (lst &key val-fn weight-fn)
+  (when lst
+    (let ((vals (if val-fn (mapcar val-fn lst) lst))
+	  (weights (if weight-fn 
+		       (mapcar weight-fn lst)
+		       (mapcar (lambda (x) 1) lst))))
+      (/ (reduce #'+ vals)
+	 (reduce #'+ weights)))))
+
 (defun lookup (alist key)
   (cdr (assoc key alist)))
 
@@ -191,11 +200,17 @@
 		vals))))
 
 ;;;; hash-table utilities
+(defun maphashl (fn ht)
+  "functional version of maphash that returns a list"
+  (let (acc)
+    (maphash (lambda (k v)
+	       (push (funcall fn k v) acc))
+	     ht)
+    (reverse acc)))
+
 (defun hash-table->alist (ht)
   "turn a hash table in to an association list"
-  (let (alist)
-    (maphash #'(lambda (key value) (setf alist (acons key value alist))) ht)
-    alist))
+  (maphashl #'cons ht))
 
 (defun alist->hash-table (alist)
   "turn an alist into a hash table"
@@ -207,12 +222,11 @@
 
 (defun sum-ht-values (ht)
   "sum the values in a hash-table"
-  (let ((sum 0))
-    (maphash #'(lambda (key value)
-		 key ; ignore
-		 (incf sum value))
-	     ht)
-    sum))
+  (reduce #'+ (maphashl
+	       (lambda (k v) 
+		 (declare (ignore k)) 
+		 v) 
+	       ht)))
 
 (defun sort-alist-descending (alist)
   "sort an alist by its values, descending"
@@ -225,7 +239,7 @@
   "sort a hash-table by its values, descending (returns an alist)"
   (sort-alist-descending (hash-table->alist ht)))
 
-					; to let us see what's in a hash-table we print
+; to let us see what's in a hash-table we print
 (set-pprint-dispatch 'hash-table
 		     (lambda (str ht)
 		       (format str "{~{~{~S => ~S~}~^ ~}}"
@@ -819,8 +833,6 @@
 		 (let ((sorted-classes (sort v
 					     #'<
 					     :key #'classifier-stats-vocabulary-size)))
-		   (print k)
-		   (print (length sorted-classes))
 		   (push (make-series
 			  :label k
 			  :x (mapcar #'classifier-stats-vocabulary-size
@@ -833,9 +845,10 @@
 				     sorted-classes))
 			 series-list)))
 	       (get-learning-stats))
-      series-list))
+      (apply #'series-graph series-list)))
   ; end lexical env
   )
+
 
 
 
