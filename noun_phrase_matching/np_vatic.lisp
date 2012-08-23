@@ -216,7 +216,10 @@
 
 (defun sort-alist-descending (alist)
   "sort an alist by its values, descending"
-  (sort alist #'> :key #'cdr))
+  (sort alist #'(lambda (&rest vals) 
+		  (when (every #'numberp vals)
+		    (apply #'> vals)))
+	:key #'cdr))
 
 (defun sort-ht-descending (ht)
   "sort a hash-table by its values, descending (returns an alist)"
@@ -368,8 +371,7 @@
   label ; can be anything
   distribution ; a hash table of frequencies
   prior ; a number, the prior probability
-  training-instances ; an integer
-  )
+)
 
 (defun nbc-class-from-feature-bag (feature-bag &key label (prior 1) (ht-skimming-fn #'identity))
   (make-nbc-class :distribution (funcall ht-skimming-fn (frequencies feature-bag))
@@ -689,6 +691,13 @@
   binding ; object referred to 
   words ; a list of symbols, not strings
 )
+
+(defstruct classifier-stats
+  id
+  vocabulary-size
+  (recognized-instances-count 0)
+  (total-instances-count 0)
+)
     
 (defun group-response-words-by-object (resp)
   (remove-if-not #'object-reference-binding
@@ -700,50 +709,122 @@
 					   (partition-values partition))))
 			 (partition-by #'response-word-object-binding (response-word-list resp)))))
 
+(let ((learning-classes (make-hash-table :test #'equal)))
+  (defun get-learning-classes ()
+    learning-classes)
 
-(defun proof (sequence scene &key (discount-most-recent nil) (verbose nil) (sampling-rate 1) seed)
-  (let* ((training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
-	 (training-scenes (read-scenes-sequence sequence 
-						:num-to-read (1+ scene)
-						:sampling-rate sampling-rate
-						:seed seed))
-	 (classes (funcall training-fn training-scenes))
-	 (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
-	 (match-count 0)
-	 (total-count 0))
-    (dolist (object-reference goldstandard)
-      (unless (and discount-most-recent (= (object-reference-binding object-reference)
-					   scene))
-	(let ((classification (nbc-classify (object-reference-words object-reference)
-					    classes)))
-	  (if verbose
-	      (format t "~A (~A) -> ~A~%"
-		      (object-reference-words object-reference)
-		      (object-reference-binding object-reference)
-		      (if classification (nbc-class-label classification))))
-	  (if (and classification (eq (nbc-class-label classification)
-				      (object-reference-binding object-reference)))
-	      (incf match-count)))
-	(incf total-count)))
-    (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene match-count total-count
-	    (if (= total-count 0) "--" (/ match-count total-count)))
-    (values match-count total-count)))
+  (defun new-run ()
+    (setf learning-classes (make-hash-table :test #'equal)))
 
-(defun proof-all (&key (discount-most-recent nil) (verbose nil) (sampling-rate 1) seed)
+  (defun proof (sequence scene &key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+    (let* ((training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
+	   (training-scenes (read-scenes-sequence sequence 
+						  :num-to-read (1+ scene)
+						  :sampling-rate sampling-rate
+						  :seed seed))
+	   (classes (funcall training-fn training-scenes))
+	   (classes-ht (make-hash-table :test #'equal))
+	   (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
+	   (match-count 0)
+	   (total-count 0))
+
+      (dolist (class classes)
+	(let ((stats (make-classifier-stats
+		     :id (list sequence (nbc-class-label class))
+		     :vocabulary-size (hash-table-count (nbc-class-distribution class)))))
+	  (setf (gethash (nbc-class-label class) classes-ht)
+		stats)
+	  (push stats (gethash (list sequence (nbc-class-label class)) learning-classes '()))))
+      ; go through the gold standard, classifying each np
+      (dolist (object-reference goldstandard)
+	(unless (and discount-most-recent (= (object-reference-binding object-reference)
+					     scene))
+	  (let ((classification (nbc-classify (object-reference-words object-reference)
+					      classes)))
+	    (if (and (numberp verbose-level) (> verbose-level 1))
+		(format t "~A (~A) -> ~A~%"
+			(object-reference-words object-reference)
+			(object-reference-binding object-reference)
+			(if classification (nbc-class-label classification))))
+	    (if (and classification (eq (nbc-class-label classification)
+					(object-reference-binding object-reference)))
+		(progn
+		  (incf match-count)
+		  (incf (classifier-stats-recognized-instances-count 
+			 (gethash (object-reference-binding object-reference) classes-ht))))))
+	  (incf total-count)
+	  (incf (classifier-stats-total-instances-count  
+		 (gethash (object-reference-binding object-reference) classes-ht)))))
+      (if (and (numberp verbose-level) (> verbose-level 0))
+	  (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene match-count total-count
+		  (if (= total-count 0) "--" (/ match-count total-count))))
+      (values match-count total-count)))
+
+  (defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
     (let ((matched 0)
 	  (total 0))
-    (dolist (sequence (range 1 14))
-      (dolist (scene (range 0 (1- (sequence-length sequence))))
-	(multiple-value-bind (this-match this-total) 
-	    (proof sequence scene 
-		   :discount-most-recent discount-most-recent
-		   :verbose verbose
-		   :sampling-rate sampling-rate
-		   :seed seed)
-	  (incf matched this-match)
-	  (incf total this-total))))
-    (format t "~A of ~A (~$) overall" matched total (/ matched total))
-    (values matched total)))
+      (dolist (sequence (range 1 14))
+	(dolist (scene (range 0 (1- (sequence-length sequence))))
+	  (multiple-value-bind (this-match this-total) 
+	      (proof sequence scene 
+		     :discount-most-recent discount-most-recent
+		     :verbose-level verbose-level
+		     :sampling-rate sampling-rate
+		     :seed seed)
+	    (incf matched this-match)
+	    (incf total this-total))))
+      (format t "~A of ~A (~$) overall" matched total (/ matched total))
+      (values matched total)))
+
+  (defun sanity-check ()
+    (let ((obj 0)
+	       (rec 0))
+	   (maphash 
+	    (lambda (k v)
+	      (declare (ignore k))
+;	    (print k)
+	    (dolist (e v)
+	      (let ((d_rec (classifier-stats-recognized-instances-count e))
+		    (d_obj (classifier-stats-total-instances-count e)))
+;		(format t "~A ~A" d_rec d_obj)
+		(incf obj d_obj)
+		(incf rec d_rec))))
+	    (get-learning-classes))
+	   (values rec obj)))
+
+  (defun learning-curves (&key (seed 1))
+    (new-run)
+    (mapcar (lambda (p)
+	      (proof-all :sampling-rate p
+			 :seed seed))
+	    ;(range 0 1 (/ 1 20)))
+	    (list 1))
+    (let (series-list)
+      (maphash (lambda (k v)
+		 (let ((sorted-classes (sort v
+					     #'<
+					     :key #'classifier-stats-vocabulary-size)))
+		   (print k)
+		   (print (length sorted-classes))
+		   (push (make-series
+			  :label k
+			  :x (mapcar #'classifier-stats-vocabulary-size
+				     sorted-classes)
+			  :y (mapcar #'(lambda (class)
+					 (/ (classifier-stats-recognized-instances-count class)
+					    (if (= 0 (classifier-stats-total-instances-count class))
+						1
+						(classifier-stats-total-instances-count class))))
+				     sorted-classes))
+			 series-list)))
+	       (get-learning-classes))
+      series-list))
+  ; end lexical env
+  )
+
+
+
+;(defun learning-curves (&key (discount-most-recent t)
 	      
 ;;;; stuff for vatic
 (defun nbc-class-from-feature-alist (feature-alist &key label (prior 1) (ht-skimming-fn #'identity))
@@ -753,16 +834,20 @@
 
 ;; in progress
 
-(defun learning-curve ()
-  (mapcar (lambda (sr) (proof-all :verbose t :discount-most-recent t :seed 123 :sampling-rate sr)) (range 0 1 (/ 1 10))))
+(defstruct series
+  label
+  x
+  y)
 
-(defun series-graph (x y &optional window)
-	   (let* ((xa (map 'vector #'identity x))
-		  (ya (map 'vector #'identity y))
-		  (yb (map 'vector (lambda (x) (* x 2)) y))
-		  (ba (cl-plplot:new-x-y-plot xa ya))
-		  (bb (cl-plplot:new-x-y-plot xa yb))
-		  (w (or window (cl-plplot:basic-window))))
-	     (cl-plplot:add-plot-to-window w ba)
-	     (cl-plplot:add-plot-to-window w bb)
-	     (cl-plplot:render w "tk")))
+(defun app-series (range fn)
+  (make-series :x range
+	       :y (mapcar fn range)))
+
+(defun series-graph (&rest series)
+  (let ((w (cl-plplot:basic-window)))
+    (dolist (s series)
+      (let* ((xa (map 'vector #'identity (series-x s)))
+	     (ya (map 'vector #'identity (series-y s)))
+	     (ba (cl-plplot:new-x-y-plot xa ya)))
+	(cl-plplot:add-plot-to-window w ba)))
+    (cl-plplot:render w "tk")))
