@@ -826,14 +826,14 @@
 	      (proof-all :discount-most-recent discount-most-recent
 			 :sampling-rate p
 			 :seed seed))
-	    (range 0 1 (/ 1 20)))
+	    (range 0 1 (/ 1 10)))
 					;	    (list 1))
-    (let (series-list)
-      (maphash (lambda (k v)
-		 (let ((sorted-classes (sort v
-					     #'<
-					     :key #'classifier-stats-vocabulary-size)))
-		   (push (make-series
+    (apply #'series-graph 
+	   (maphashl (lambda (k v)
+		       (let ((sorted-classes (sort v
+						   #'<
+						   :key #'classifier-stats-vocabulary-size)))
+			 (make-series
 			  :label k
 			  :x (mapcar #'classifier-stats-vocabulary-size
 				     sorted-classes)
@@ -842,10 +842,8 @@
 					    (if (= 0 (classifier-stats-total-instances-count class))
 						1
 						(classifier-stats-total-instances-count class))))
-				     sorted-classes))
-			 series-list)))
-	       (get-learning-stats))
-      (apply #'series-graph series-list)))
+				     sorted-classes))))
+		     (get-learning-stats))))
 					; end lexical env
   )
 
@@ -876,6 +874,6 @@
     (dolist (s series)
       (let* ((xa (map 'vector #'identity (series-x s)))
 	     (ya (map 'vector #'identity (series-y s)))
-	     (ba (cl-plplot:new-x-y-plot xa ya)))
+	     (ba (cl-plplot:new-x-y-plot xa ya :line-style 0)))
 	(cl-plplot:add-plot-to-window w ba)))
     (cl-plplot:render w "tk")))
