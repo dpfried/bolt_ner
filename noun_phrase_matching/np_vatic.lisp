@@ -97,7 +97,7 @@
     (14 8)))
 
 ;;;; general utilities
-(defun weighted-avg (lst &key val-fn weight-fn)
+(defun avg (lst &key val-fn weight-fn)
   (when lst
     (let ((vals (if val-fn (mapcar val-fn lst) lst))
 	  (weights (if weight-fn 
@@ -787,22 +787,32 @@
 		      (if (= scene-total-count 0) "--" (/ scene-match-count scene-total-count))))
 	  (incf sequence-match-count scene-match-count)
 	  (incf sequence-total-count scene-total-count)))
-      (values sequence-match-count sequence-total-count)))
+      (make-classifier-stats :id sequence
+			     :vocabulary-size (funcall #'avg (maphashl (lambda (k v)
+									 (declare (ignore k))
+									 (classifier-stats-vocabulary-size v))
+								       sequence-stats))
+			     :recognized-instances-count sequence-match-count
+			     :total-instances-count sequence-total-count)))
   
   (defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
     (let ((matched 0)
-	  (total 0))
+	  (total 0)
+	  avg-vocabs)
       (dolist (sequence (range 1 14))
-	(multiple-value-bind (this-match this-total)
-	    (proof-sequence sequence 
-			    :discount-most-recent discount-most-recent
-			    :verbose-level verbose-level
-			    :sampling-rate sampling-rate
-			    :seed seed)
-	  (incf matched this-match)
-	  (incf total this-total)))
+	(let ((classifier-stats (proof-sequence sequence 
+						:discount-most-recent discount-most-recent
+						:verbose-level verbose-level
+						:sampling-rate sampling-rate
+						:seed seed)))
+	  (incf matched (classifier-stats-recognized-instances-count classifier-stats))
+	  (incf total (classifier-stats-total-instances-count classifier-stats))
+	  (push (classifier-stats-vocabulary-size classifier-stats) avg-vocabs)))
       (format t "~A of ~A (~$) overall" matched total (/ matched total))
-      (values matched total)))
+      (make-classifier-stats :id 'all
+			     :vocabulary-size (avg avg-vocabs)
+			     :recognized-instances-count matched
+			     :total-instances-count total)))
   
   (defun sanity-check ()
     (let ((obj 0)
@@ -820,30 +830,23 @@
        (get-learning-stats))
       (values rec obj)))
 
-  (defun learning-curves (&key (discount-most-recent t) (seed 1))
+  (defun learning-curves (&key (discount-most-recent t) (seed 1) (resolution 20))
     (new-run)
-    (mapcar (lambda (p)
-	      (proof-all :discount-most-recent discount-most-recent
-			 :sampling-rate p
-			 :seed seed))
-	    (range 0 1 (/ 1 10)))
-					;	    (list 1))
-    (apply #'series-graph 
-	   (maphashl (lambda (k v)
-		       (let ((sorted-classes (sort v
-						   #'<
-						   :key #'classifier-stats-vocabulary-size)))
-			 (make-series
-			  :label k
-			  :x (mapcar #'classifier-stats-vocabulary-size
-				     sorted-classes)
-			  :y (mapcar #'(lambda (class)
-					 (/ (classifier-stats-recognized-instances-count class)
-					    (if (= 0 (classifier-stats-total-instances-count class))
-						1
-						(classifier-stats-total-instances-count class))))
-				     sorted-classes))))
-		     (get-learning-stats))))
+    (let* ((sampling-rates (range 0 1 (/ 1 resolution))) 
+	   (proof-results (mapcar (lambda (p)
+				    (proof-all :discount-most-recent discount-most-recent
+					       :sampling-rate p
+					       :seed seed))
+				  sampling-rates)))
+      (print proof-results)
+      (series-graph (make-series
+		     :x (mapcar #'classifier-stats-vocabulary-size proof-results)
+		     :y (mapcar (lambda (class)
+				  (/ (classifier-stats-recognized-instances-count class)
+				     (if (> (classifier-stats-total-instances-count class) 0)
+					 (classifier-stats-total-instances-count class)
+					 1)))
+				proof-results)))))
 					; end lexical env
   )
 
@@ -874,6 +877,6 @@
     (dolist (s series)
       (let* ((xa (map 'vector #'identity (series-x s)))
 	     (ya (map 'vector #'identity (series-y s)))
-	     (ba (cl-plplot:new-x-y-plot xa ya :line-style 0)))
+	     (ba (cl-plplot:new-x-y-plot xa ya)))
 	(cl-plplot:add-plot-to-window w ba)))
     (cl-plplot:render w "tk")))
