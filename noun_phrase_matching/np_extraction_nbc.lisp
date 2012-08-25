@@ -7,19 +7,27 @@
   (with-open-file (file filename)
     (sample (read file nil) sampling-rate :seed seed)))
 
-(defun sample (lst sampling-rate &key seed)
-  (let ((rs (if seed 
-		(seed-random-state seed)
-		*random-state*)))
-  (remove-if (lambda (e)
-	       (declare (ignore e))
-	       (> (random 1.0 rs) sampling-rate))
-	     lst)))
-	       
 
 (defparameter *base-path* "~/bolt_gt/dumps_raw/")
 
 (defparameter *responses-path* "~/Dropbox/bolt/blockworld/annotations/")
+
+(defun sequence-length (sequence-index)
+  (ecase sequence-index
+    (1 2)
+    (2 3)
+    (3 4)
+    (4 5)
+    (5 3)
+    (6 3)
+    (7 4)
+    (8 6)
+    (9 3)
+    (10 5)
+    (11 2)
+    (12 5)
+    (13 3)
+    (14 8)))
 
 (defun responses-path (sequence scene)
   (format nil "~A~A/~A/responses.json" *responses-path* sequence scene))
@@ -56,46 +64,6 @@
   (make-response-word :text (lookup json :word)
 	     :object-binding (lookup json :object--binding)))
 
-#|
-(defun ground-lfs (&key :sampling-rate :seed) 
-  (read-lfs (format nil "~A~A" *base-path* "base_obj.parsed") 
-	    :sampling-rate sampling-rate :seed seed))
-|#
-
-(defun export-nps (sequence-id scene-id &optional (base-path *base-path*) (filename "noun-phrases"))
-  (let ((scene-lfs (scene-lfs sequence-id scene-id)))
-    (with-open-file (stream (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) :direction :output :if-exists :supersede)
-      (dolist (response-list scene-lfs)
-	(let* ((responses (cdr response-list))
-	       (nps (mappend #'get-nps responses))
-	       (innermost-nps (remove-if #'(lambda (sexps) (find-if #'(lambda (sexp) (has-internal-node? sexp 'np)) sexps)) nps))
-	       (word-list (mapcar #'(lambda (sexps) (words-from-forest sexps)) innermost-nps)))
-	  (print "new set")
-	  (print "nps")
-	  (print nps)
-	  (print "innermost:")
-	  (print innermost-nps)
-	  (print "words:")
-	  (print word-list)
-	  (print word-list stream))))))
-
-(defun sequence-length (sequence-index)
-  (ecase sequence-index
-    (1 2)
-    (2 3)
-    (3 4)
-    (4 5)
-    (5 3)
-    (6 3)
-    (7 4)
-    (8 6)
-    (9 3)
-    (10 5)
-    (11 2)
-    (12 5)
-    (13 3)
-    (14 8)))
-
 ;;;; general utilities
 (defun avg (lst &key val-fn weight-fn)
   (when lst
@@ -119,7 +87,12 @@
   values
 )
 
-(defun partition-by (f seq &key (equality #'equal))
+(defmacro while (test &rest body)
+  `(do ()
+       ((not ,test))
+     ,@body))
+
+(defun partition-sequence (f seq &key (equality #'equal))
   "applies f to each item in seq, splitting it each time f returns a new value"
   (when seq
     (let* ((fv (funcall f (car seq)))
@@ -129,18 +102,28 @@
 	(push (pop ptr) acc))
       (cons (make-partition :key fv
 			    :values acc)
-	    (partition-by f ptr)))))
+	    (partition-sequence f ptr)))))
+
+(defun partition-set (set &key key (equivalence-test #'eq) transform)
+  "return a list of partitions of the set.
+key should return a unique value for each partition. equivalence-test is used
+to compare key values. transform will be applied to each element in the partitions"
+  (let ((partitions (make-hash-table :test equivalence-test)))
+    (dolist (elem set)
+      (push (if transform 
+		(funcall transform elem)
+		elem)
+	    (gethash (if key (funcall key elem) elem)
+		     partitions)))
+    (maphashl (lambda (k v)
+		 (declare (ignore k)) 
+		 v) partitions)))
 
 (defun range (start end &optional (step 1))
   "list of ints from start to end, inclusive"
   (if (> start end)
       nil
       (cons start (range (+ start step) end step))))
-
-(defmacro while (test &rest body)
-  `(do ()
-       ((not ,test))
-     ,@body))
 
 (defun mappend (fn &rest lsts)
   "non-destructive version of mapcan"
@@ -439,15 +422,7 @@
       sexp))
 |#
 
-(defun partition (sequence &key (key #'identity) (equivalence-test #'eq) (transform #'identity))
-  (let (partitions)
-    (dolist (elem sequence)
-      (let* ((key (funcall key elem))
-	     (lookup (assoc key partitions :test equivalence-test)))
-	(if lookup
-	    (rplacd lookup (cons (funcall transform elem) (cdr lookup)))
-	    (setf partitions (cons (cons key (list (funcall transform elem))) partitions)))))
-    partitions))
+
 
 ;;;; scene functions
 (defstruct scene
@@ -528,13 +503,17 @@
 	scene-classes)))
 
 
-(defun train-classes-by-feature (scene-list &key schematic-key-fn parse-tree-winnowing-fn (ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
+(defun train-classes-by-feature (scene-list &key 
+				 schematic-key-fn 
+				 parse-tree-winnowing-fn 
+				 (ht-skimming-fn #'(lambda (ht) 
+						     (skim-ht-threshold ht *ht-min-threshold*))))
   "scene-key-fn should return a list of features from a schematic"
   (let* ((scene-feature-list (mappend #'(lambda (scene) 
 					  (mapcar #'(lambda (feature) (cons feature scene))
 						  (funcall schematic-key-fn (scene-schematic scene))))
 				      scene-list))
-	 (feature-partition (partition scene-feature-list :key #'car :transform #'cdr))
+	 (feature-partition (partition-set scene-feature-list :key #'car :transform #'cdr))
 	 (num-classifications (reduce #'+ (mapcar #'(lambda (feature-list) (length (cdr feature-list)))
 						  feature-partition))))
     (mapcar #'(lambda (feature-list)
@@ -609,7 +588,7 @@
 
 ;;;; calculate model distributions
 (defun model-distribution-parameters-by-length (feature-bag-list classes)
-  (let ((by-length (partition feature-bag-list :key #'length)))
+  (let ((by-length (partition-set feature-bag-list :key #'length)))
     (mapcar #'(lambda (pair)
 		(let* ((length (car pair))
 		       (feature-bag-list-sub (cdr pair))
@@ -721,156 +700,120 @@
 			    :words (mapcar (lambda (response-word)
 					     (intern (string-upcase (response-word-text response-word))))
 					   (partition-values partition))))
-			 (partition-by #'response-word-object-binding (response-word-list resp)))))
+			 (partition-sequence #'response-word-object-binding (response-word-list resp)))))
 
-(let ((learning-stats (make-hash-table :test #'equal)))
-  (defun get-learning-stats ()
-    learning-stats)
-
-  (defun new-run ()
-    (setf learning-stats (make-hash-table :test #'equal)))
-
-  (defun proof-sequence (sequence &key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
-    (let* ((num-scenes (sequence-length sequence))
-	   (training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
-	   (sequence-stats (make-hash-table :test #'equal))
-	   (sequence-match-count 0)
-	   (sequence-total-count 0))
+(defun proof-sequence (sequence &key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+  (let* ((num-scenes (sequence-length sequence))
+	 (training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
+	 (sequence-stats (make-hash-table :test #'equal))
+	 (sequence-match-count 0)
+	 (sequence-total-count 0))
 					; Go through all scenes, running accuracy figures on each
-      (dolist (scene (range 0 (1- num-scenes)))
-	(let* ((training-scenes (read-scenes-sequence sequence 
-						      :num-to-read (1+ scene)
-						      :sampling-rate sampling-rate
-						      :seed seed))
-	       (classes (funcall training-fn training-scenes))
-	       (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
-	       (scene-match-count 0)
-	       (scene-total-count 0)
-	       (class (car (last classes)))
-	       (object-label (nbc-class-label class))
-	       (stats (make-classifier-stats
-		       :id (list sequence object-label)
-		       :vocabulary-size (hash-table-count (nbc-class-distribution class)))))
+    (dolist (scene (range 0 (1- num-scenes)))
+      (let* ((training-scenes (read-scenes-sequence sequence 
+						    :num-to-read (1+ scene)
+						    :sampling-rate sampling-rate
+						    :seed seed))
+	     (classes (funcall training-fn training-scenes))
+	     (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
+	     (scene-match-count 0)
+	     (scene-total-count 0)
+	     (class (car (last classes)))
+	     (object-label (nbc-class-label class))
+	     (stats (make-classifier-stats
+		     :id (list sequence object-label)
+		     :vocabulary-size (hash-table-count (nbc-class-distribution class)))))
 					; store in sequence-stats just by label
-	  (unless (and discount-most-recent (= scene (1- num-scenes)))
-	    (setf (gethash scene sequence-stats) stats)
-					; store in learning-stats (which contains stats for multiple sampling-rates and sequences)
-					; by sequence and label
-	    (push stats (gethash (list sequence scene) learning-stats '())))
+	(unless (and discount-most-recent (= scene (1- num-scenes)))
+	  (setf (gethash scene sequence-stats) stats))
 					; for each scene, go through the gold standard responses, classifying each labeled np
-	  (dolist (object-reference goldstandard)
+	(dolist (object-reference goldstandard)
 					; exclude any objects that were just added in this scene, if discount-most-recent is T
-	    (unless (and discount-most-recent (= (object-reference-binding object-reference)
-						 scene))
-	      (let ((classification (nbc-classify (object-reference-words object-reference)
-						  classes)))
-		(if (and (numberp verbose-level) (> verbose-level 1))
-		    (format t "~A (~A) -> ~A~%"
-			    (object-reference-words object-reference)
-			    (object-reference-binding object-reference)
-			    (if classification (nbc-class-label classification))))
-		(if (and classification (eq (nbc-class-label classification)
-					    (object-reference-binding object-reference)))
-		    (progn
+	  (unless (and discount-most-recent (= (object-reference-binding object-reference)
+					       scene))
+	    (let ((classification (nbc-classify (object-reference-words object-reference)
+						classes)))
+	      (if (and (numberp verbose-level) (> verbose-level 1))
+		  (format t "~A (~A) -> ~A~%"
+			  (object-reference-words object-reference)
+			  (object-reference-binding object-reference)
+			  (if classification (nbc-class-label classification))))
+	      (if (and classification (eq (nbc-class-label classification)
+					  (object-reference-binding object-reference)))
+		  (progn
 					; increase match for this scene
-		      (incf scene-match-count)
+		    (incf scene-match-count)
 					; increase match for this object
-		      (incf (classifier-stats-recognized-instances-count 
-			     (gethash (object-reference-binding object-reference) sequence-stats))))))
+		    (incf (classifier-stats-recognized-instances-count 
+			   (gethash (object-reference-binding object-reference) sequence-stats))))))
 					; increase total for this scene
-	      (incf scene-total-count)
+	    (incf scene-total-count)
 					; increase total for this object
-	      (incf (classifier-stats-total-instances-count  
-		     (gethash (object-reference-binding object-reference) sequence-stats)))))
-	  (if (and (numberp verbose-level) (> verbose-level 0))
-	      (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene scene-match-count scene-total-count
-		      (if (= scene-total-count 0) "--" (/ scene-match-count scene-total-count))))
-	  (incf sequence-match-count scene-match-count)
-	  (incf sequence-total-count scene-total-count)))
-      (make-classifier-stats :id sequence
-			     :vocabulary-size (funcall #'avg (maphashl (lambda (k v)
-									 (declare (ignore k))
-									 (classifier-stats-vocabulary-size v))
-								       sequence-stats))
-			     :recognized-instances-count sequence-match-count
-			     :total-instances-count sequence-total-count)))
+	    (incf (classifier-stats-total-instances-count  
+		   (gethash (object-reference-binding object-reference) sequence-stats)))))
+	(if (and (numberp verbose-level) (> verbose-level 0))
+	    (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene scene-match-count scene-total-count
+		    (if (= scene-total-count 0) "--" (/ scene-match-count scene-total-count))))
+	(incf sequence-match-count scene-match-count)
+	(incf sequence-total-count scene-total-count)))
+    (make-classifier-stats :id sequence
+			   :vocabulary-size (funcall #'avg (maphashl (lambda (k v)
+								       (declare (ignore k))
+								       (classifier-stats-vocabulary-size v))
+								     sequence-stats))
+			   :recognized-instances-count sequence-match-count
+			   :total-instances-count sequence-total-count)))
   
-  (defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
-    (let ((matched 0)
-	  (total 0)
-	  avg-vocabs)
-      (dolist (sequence (range 1 14))
-	(let ((classifier-stats (proof-sequence sequence 
-						:discount-most-recent discount-most-recent
-						:verbose-level verbose-level
-						:sampling-rate sampling-rate
-						:seed seed)))
-	  (incf matched (classifier-stats-recognized-instances-count classifier-stats))
-	  (incf total (classifier-stats-total-instances-count classifier-stats))
-	  (push (classifier-stats-vocabulary-size classifier-stats) avg-vocabs)))
-      (format t "~A of ~A (~$) overall" matched total (/ matched total))
-      (make-classifier-stats :id 'all
-			     :vocabulary-size (avg avg-vocabs)
-			     :recognized-instances-count matched
-			     :total-instances-count total)))
+(defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+  (let ((matched 0)
+	(total 0)
+	avg-vocabs)
+    (dolist (sequence (range 1 14))
+      (let ((classifier-stats (proof-sequence sequence 
+					      :discount-most-recent discount-most-recent
+					      :verbose-level verbose-level
+					      :sampling-rate sampling-rate
+					      :seed seed)))
+	(incf matched (classifier-stats-recognized-instances-count classifier-stats))
+	(incf total (classifier-stats-total-instances-count classifier-stats))
+	(push (classifier-stats-vocabulary-size classifier-stats) avg-vocabs)))
+    (format t "~A of ~A (~$) overall" matched total (/ matched total))
+    (make-classifier-stats :id 'all
+			   :vocabulary-size (avg avg-vocabs)
+			   :recognized-instances-count matched
+			   :total-instances-count total)))
   
-  (defun sanity-check ()
-    (let ((obj 0)
-	  (rec 0))
-      (maphash 
-       (lambda (k v)
-	 (declare (ignore k))
-					;	    (print k)
-	 (dolist (e v)
-	   (let ((d_rec (classifier-stats-recognized-instances-count e))
-		 (d_obj (classifier-stats-total-instances-count e)))
-					;		(format t "~A ~A" d_rec d_obj)
-	     (incf obj d_obj)
-	     (incf rec d_rec))))
-       (get-learning-stats))
-      (values rec obj)))
+(defun learning-curves (&key (discount-most-recent t) (seed 1) (resolution 20))
+  (let* ((sampling-rates (range 0 1 (/ 1 resolution))) 
+	 (proof-results (mapcar (lambda (p)
+				  (proof-all :discount-most-recent discount-most-recent
+					     :sampling-rate p
+					     :seed seed))
+				sampling-rates)))
+    (series-graph (make-series
+		   :x (mapcar #'classifier-stats-vocabulary-size proof-results)
+		   :y (mapcar (lambda (class)
+				(/ (classifier-stats-recognized-instances-count class)
+				   (if (> (classifier-stats-total-instances-count class) 0)
+				       (classifier-stats-total-instances-count class)
+				       1)))
+			      proof-results)))))
 
-  (defun learning-curves (&key (discount-most-recent t) (seed 1) (resolution 20))
-    (new-run)
-    (let* ((sampling-rates (range 0 1 (/ 1 resolution))) 
-	   (proof-results (mapcar (lambda (p)
-				    (proof-all :discount-most-recent discount-most-recent
-					       :sampling-rate p
-					       :seed seed))
-				  sampling-rates)))
-      (print proof-results)
-      (series-graph (make-series
-		     :x (mapcar #'classifier-stats-vocabulary-size proof-results)
-		     :y (mapcar (lambda (class)
-				  (/ (classifier-stats-recognized-instances-count class)
-				     (if (> (classifier-stats-total-instances-count class) 0)
-					 (classifier-stats-total-instances-count class)
-					 1)))
-				proof-results)))))
-					; end lexical env
-  )
-
-
-
-
-;(defun learning-curves (&key (discount-most-recent t)
+(defun sample (lst sampling-rate &key seed)
+  (let ((rs (if seed 
+		(seed-random-state seed)
+		*random-state*)))
+  (remove-if (lambda (e)
+	       (declare (ignore e))
+	       (> (random 1.0 rs) sampling-rate))
+	     lst)))
 	      
-;;;; stuff for vatic
-(defun nbc-class-from-feature-alist (feature-alist &key label (prior 1) (ht-skimming-fn #'identity))
-  (make-nbc-class :distribution (funcall ht-skimming-fn (alist->hash-table feature-alist))
-		  :prior prior
-		  :label (or label feature-alist)))
-
-;; in progress
+;;;; for graphing with cl-plplot
 
 (defstruct series
   label
   x
   y)
-
-(defun app-series (range fn)
-  (make-series :x range
-	       :y (mapcar fn range)))
 
 (defun series-graph (&rest series)
   (let ((w (cl-plplot:basic-window)))
