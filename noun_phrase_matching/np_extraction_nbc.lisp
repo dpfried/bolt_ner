@@ -32,22 +32,8 @@
 (defun responses-path (sequence scene)
   (format nil "~A~A/~A/responses.json" *responses-path* sequence scene))
 
-(defun responses (sequence scene)
+(defun read-responses (sequence scene)
   (mapcar #'response-from-json (json:decode-json (open (responses-path sequence scene)))))
-
-(defstruct (response
-	     (:print-function 
-	      (lambda (struct stream depth)
-		(declare (ignore depth))
-		(format stream "~A" (response-word-list struct)))))
-  word-list
-  id
-  string)
-
-(defun response-from-json (json)
-  (make-response :word-list (mapcar #'word-from-json (lookup json :word--list))
-		 :id (lookup json :id)
-		 :string (lookup json :string)))
 
 (defstruct (response-word
 	     (:print-function 
@@ -60,11 +46,89 @@
   text
   object-binding)
 
+(defstruct (response
+	     (:print-function 
+	      (lambda (struct stream depth)
+		(declare (ignore depth))
+		(format stream "~A" (response-word-list struct)))))
+  word-list
+  id
+  string)
+
 (defun word-from-json (json)
   (make-response-word :text (lookup json :word)
 	     :object-binding (lookup json :object--binding)))
 
+(defun response-from-json (json)
+  (make-response :word-list (mapcar #'word-from-json (lookup json :word--list))
+		 :id (lookup json :id)
+		 :string (lookup json :string)))
+
+
+
+;;;; scene functions
+(defstruct scene
+  sequence-id
+  scene-id
+  schematic
+  parse-forest
+  )
+
+(defun read-scenes-sequence (sequence-id &key num-to-read (sampling-rate 1) seed)
+  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id :sampling-rate sampling-rate :seed seed))
+	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
+
+(defun read-scenes-all (&key (sampling-rate 1) seed)
+  (mappend (lambda (sequence-num) (read-scenes-sequence sequence-num :sampling-rate sampling-rate :seed seed))
+	   (range 1 14)))
+
+(defun scene-lfs (sequence-id scene-id &key (base-path *base-path*) (filename "responses.parsed") (sampling-rate 1) seed)
+  "load the logical forms from a given sequence and scene"
+  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) 
+	    :sampling-rate sampling-rate :seed seed))
+
+(defun read-schematic (sequence-id scene-id &key (base-path *base-path*) (filename "schematic.lisp"))
+  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
+    (read file nil)))
+
+(defun read-scene (sequence-id scene-id &key (sampling-rate 1) (base-path *base-path*) seed)
+  (make-scene
+   :sequence-id sequence-id
+   :scene-id scene-id
+   :schematic (read-schematic sequence-id scene-id :base-path base-path)
+   :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id 
+					   :base-path base-path 
+					   :sampling-rate sampling-rate
+					   :seed seed))))
+
+(defun read-ground-scene (&optional path)
+  (setf path (or path (format nil "~A~A" *base-path* "base_obj.parsed")))
+  (make-scene
+   :parse-forest (mappend #'cdr (read-lfs path))))
+
+(defun camera (schematic)
+  (car schematic))
+
+(defun objects (schematic)
+  (cdr schematic))
+
+(defun last-object (schematic)
+  (car (last (objects schematic))))
+
+(defun object-shape (object)
+  (cdr (assoc 'type object)))
+
+(defun object-color (object)
+  (cdr (assoc 'color (cdr (assoc 'settings object)))))
+
 ;;;; general utilities
+(defun compose (&rest functions)
+  "Compose FUNCTIONS right-associatively, returning a function"
+  #'(lambda (x)
+      (reduce #'funcall functions
+              :initial-value x
+              :from-end t)))
+
 (defun avg (lst &key val-fn weight-fn)
   (when lst
     (let ((vals (if val-fn (mapcar val-fn lst) lst))
@@ -116,8 +180,9 @@ to compare key values. transform will be applied to each element in the partitio
 	    (gethash (if key (funcall key elem) elem)
 		     partitions)))
     (maphashl (lambda (k v)
-		 (declare (ignore k)) 
-		 v) partitions)))
+		(make-partition
+		 :key k
+		 :values v)) partitions)))
 
 (defun range (start end &optional (step 1))
   "list of ints from start to end, inclusive"
@@ -356,7 +421,7 @@ to compare key values. transform will be applied to each element in the partitio
 					    (ancestor-list parse-tree))))))
 
 (defun words-in-innermost-np (parse-tree)
-  (words-from-forest (get-innermost-nps parse-tree)))
+  (mappend #'words-from-forest (get-innermost-nps parse-tree)))
 
 ;;;; naive bayes classifier with additive smoothing
 (defun laplace-smoothed-probability (feature class-distribution size-of-feature-domain)
@@ -370,8 +435,10 @@ to compare key values. transform will be applied to each element in the partitio
   prior ; a number, the prior probability
 )
 
-(defun nbc-class-from-feature-bag (feature-bag &key label (prior 1) (ht-skimming-fn #'identity))
-  (make-nbc-class :distribution (funcall ht-skimming-fn (frequencies feature-bag))
+(defun nbc-class-from-feature-bag (feature-bag &key label (prior 1) ht-skimming-fn)
+  (make-nbc-class :distribution (if ht-skimming-fn
+				    (funcall ht-skimming-fn (frequencies feature-bag))
+				    (frequencies feature-bag))
 		  :prior prior
 		  :label (or label feature-bag)))
 
@@ -424,57 +491,6 @@ to compare key values. transform will be applied to each element in the partitio
 
 
 
-;;;; scene functions
-(defstruct scene
-  schematic
-  parse-forest
-  )
-
-(defun read-scenes-sequence (sequence-id &key num-to-read (sampling-rate 1) seed)
-  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id :sampling-rate sampling-rate :seed seed))
-	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
-
-(defun read-scenes-all (&key (sampling-rate 1) seed)
-  (mappend (lambda (sequence-num) (read-scenes-sequence sequence-num :sampling-rate sampling-rate :seed seed))
-	   (range 1 14)))
-
-(defun scene-lfs (sequence-id scene-id &key (base-path *base-path*) (filename "responses.parsed") (sampling-rate 1) seed)
-  "load the logical forms from a given sequence and scene"
-  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) 
-	    :sampling-rate sampling-rate :seed seed))
-
-(defun read-scene-schematic (sequence-id scene-id &optional (base-path *base-path*) (filename "schematic.lisp"))
-  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
-    (read file nil)))
-
-(defun read-scene (sequence-id scene-id &key (sampling-rate 1) (base-path *base-path*) seed)
-  (make-scene
-   :schematic (read-scene-schematic sequence-id scene-id base-path)
-   :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id 
-					   :base-path base-path 
-					   :sampling-rate sampling-rate
-					   :seed seed))))
-
-(defun read-ground-scene (&optional path)
-  (setf path (or path (format nil "~A~A" *base-path* "base_obj.parsed")))
-  (make-scene
-   :parse-forest (mappend #'cdr (read-lfs path))))
-
-(defun camera (schematic)
-  (car schematic))
-
-(defun objects (schematic)
-  (cdr schematic))
-
-(defun last-object (schematic)
-  (car (last (objects schematic))))
-
-(defun object-shape (object)
-  (cdr (assoc 'type object)))
-
-(defun object-color (object)
-  (cdr (assoc 'color (cdr (assoc 'settings object)))))
-
 ;;;; training functions: take a scene list. for each scene, 
 ;;;; extract words from all response parse trees according 
 ;;;; to a parse tree winnowing function, then generate a 
@@ -513,7 +529,10 @@ to compare key values. transform will be applied to each element in the partitio
 					  (mapcar #'(lambda (feature) (cons feature scene))
 						  (funcall schematic-key-fn (scene-schematic scene))))
 				      scene-list))
-	 (feature-partition (partition-set scene-feature-list :key #'car :transform #'cdr))
+	 (feature-partition (mapcar #'partition-values
+				    (partition-set scene-feature-list 
+						   :key #'car 
+						   :transform #'cdr)))
 	 (num-classifications (reduce #'+ (mapcar #'(lambda (feature-list) (length (cdr feature-list)))
 						  feature-partition))))
     (mapcar #'(lambda (feature-list)
@@ -526,6 +545,50 @@ to compare key values. transform will be applied to each element in the partitio
 					    :ht-skimming-fn ht-skimming-fn))
 	    
 	    feature-partition)))
+
+(defun ensure-list (o)
+  (if (listp o) 
+      o
+      (list o)))
+
+(defun winnow-scene (scene parse-tree-winnowing-fn)
+  "takes a scene and a function that maps a "
+  (remove-if #'null (mapcar parse-tree-winnowing-fn
+			    (scene-parse-forest scene))))
+
+(defun train-classes-by-feature1 (scene-list &key
+				  feature-fn
+				  winnowing-fn
+				  ht-skimming-fn)
+  (labels ((count-feature-instances (partition)
+	     (reduce #'+ (mapcar #'length (partition-values partition))))
+	   (features-cross-scenes (scene)
+	     (mapcar (lambda (feature)
+		       (cons feature scene))
+		     (ensure-list (funcall feature-fn scene)))))
+    (let* ((scene-feature-list (mappend #'features-cross-scenes scene-list))
+	   (partitions (partition-set scene-feature-list
+				      :key (lambda (feature-scene-pair)
+					     (car feature-scene-pair))
+				      :transform (lambda (feature-scene-pair)
+						   (winnow-scene (cdr feature-scene-pair)
+								 winnowing-fn))))
+	   (total-instance-count (reduce #'+ (mapcar #'count-feature-instances partitions))))
+ ; (print scene-feature-list)
+      (print partitions)
+      (mapcar (lambda (partition)
+					; partition key : the feature 
+					; partition value : lists of feature bags from parse-tree-winnowing-fn, 
+					; one for each scene
+		(nbc-class-from-feature-bag
+		 (mapcan (lambda (feature-list) 
+			   (apply #'append feature-list)) 
+			 (partition-values partition))
+		 :label (partition-key partition)
+		 :prior (/ (count-feature-instances partition)
+			   total-instance-count)
+		 :ht-skimming-fn ht-skimming-fn))
+	      partitions))))
 
 
 (defun train-classes-shape-subject (scene-list)
@@ -588,11 +651,14 @@ to compare key values. transform will be applied to each element in the partitio
 
 ;;;; calculate model distributions
 (defun model-distribution-parameters-by-length (feature-bag-list classes)
-  (let ((by-length (partition-set feature-bag-list :key #'length)))
-    (mapcar #'(lambda (pair)
-		(let* ((length (car pair))
-		       (feature-bag-list-sub (cdr pair))
-		       (all-scores (mapcar #'(lambda (fb) (nbc-score-feature-bag fb classes)) feature-bag-list-sub))
+  (let ((length-partition 
+	 (partition-set feature-bag-list :key #'length)))
+    (mapcar #'(lambda (partition)
+		(let* ((length (partition-key partition))
+		       (feature-bag-list-sub (partition-values partition))
+		       (all-scores (mapcar #'(lambda (fb) 
+					       (nbc-score-feature-bag fb classes))
+					   feature-bag-list-sub))
 		       (n (length all-scores))
 		       (flattened (apply #'append all-scores)))
 		  (cons length
@@ -600,7 +666,7 @@ to compare key values. transform will be applied to each element in the partitio
 			 :mean (mean flattened)
 			 :sd (standard-deviation flattened)
 			 :n n))))
-	    by-length)))
+	    length-partition)))
 
 (defun model-distribution-parameters (training-fn &key (feature-extraction-fn #'all-innermost-nps) 
 				      (classification-scenes (read-scenes-all)) 
@@ -715,7 +781,8 @@ to compare key values. transform will be applied to each element in the partitio
 						    :sampling-rate sampling-rate
 						    :seed seed))
 	     (classes (funcall training-fn training-scenes))
-	     (goldstandard (mapcan #'group-response-words-by-object (responses sequence scene)))
+	     (goldstandard (mapcan #'group-response-words-by-object 
+				   (read-responses sequence scene)))
 	     (scene-match-count 0)
 	     (scene-total-count 0)
 	     (class (car (last classes)))
