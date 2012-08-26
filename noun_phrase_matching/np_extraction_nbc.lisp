@@ -49,6 +49,7 @@
 |#
   text
   object-binding
+  sequence
   object)
 
 (defstruct (response
@@ -65,6 +66,7 @@
 (defun word-from-json (json &key sequence)
   (let ((object-index (lookup json :object--binding)))
     (make-response-word :text (lookup json :word)
+			:sequence sequence
 			:object-binding object-index
 			:object (when object-index
 				  (object-schematic sequence object-index)))))
@@ -779,7 +781,8 @@ to compare key values. transform will be applied to each element in the partitio
 
 (defstruct object-reference
   binding ; object referred to 
-  object-schematic 
+  schematic
+  sequence
   words ; a list of symbols, not strings
 )
 
@@ -795,7 +798,8 @@ to compare key values. transform will be applied to each element in the partitio
 		 (mapcar (lambda (partition) 
 			   (make-object-reference
 			    :binding (partition-key partition)
-			    :object-schematic (response-word-object 
+			    :sequence (response-word-sequence (first (partition-values partition)))
+			    :schematic (response-word-object 
 					       (first (partition-values partition)))
 			    :words (mapcar (lambda (response-word)
 					     (intern (string-upcase 
@@ -911,10 +915,38 @@ to compare key values. transform will be applied to each element in the partitio
 				  :seed seed))
 	 (classes (train-classes-by-feature scenes 
 					    :feature-fn 
-					    (compose feature-fn #'last-object #'scene-schematic)))
+					    (compose feature-fn #'last-object #'scene-schematic)
+					    :winnowing-fn
+					    #'words-in-subject-filter))
 	 (goldstandard (mapcan #'group-response-words-by-object 
-				   (read-responses-all)))))
-)
+			       (read-responses-all)))
+	 (feature-groups (partition-set goldstandard :key (compose feature-fn #'object-reference-schematic))))
+    (dolist (feature-group feature-groups)
+      (format t "proofing ~A~%" (partition-key feature-group))
+      (let ((num-matches 0)
+	    (num-instances 0))
+	(dolist (object-reference (partition-values feature-group))
+	  (let ((classification (nbc-classify (object-reference-words object-reference)
+					      classes)))
+	    (unless (and discount-most-recent
+			 (= (object-reference-binding object-reference)
+			    (1- (sequence-length (object-reference-sequence object-reference)))))
+	      (if (> verbose-level 1)
+		  (format t "~A [~A] -> ~A~%"
+			  (object-reference-words object-reference)
+			  (partition-key feature-group)
+			  (nbc-class-label classification)))
+	      (if (equal (nbc-class-label classification)
+			 (partition-key feature-group))
+		  
+		  (incf num-matches))
+	      (incf num-instances))))
+	(if (> verbose-level 0)
+	    (format t "matched ~A of ~A (~$)" 
+		    num-matches
+		    num-instances
+		    (/ num-matches num-instances)))
+	))))
   
 (defun learning-curves (&key (discount-most-recent t) (seed 1) (resolution 20))
   (let* ((sampling-rates (range 0 1 (/ 1 resolution))) 
