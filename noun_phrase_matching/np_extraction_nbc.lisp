@@ -33,38 +33,64 @@
   (format nil "~A~A/~A/responses.json" *responses-path* sequence scene))
 
 (defun read-responses (sequence scene)
-  (mapcar #'response-from-json (json:decode-json (open (responses-path sequence scene)))))
+  (mapcar #'(lambda (json)  (response-from-json json 
+						:sequence sequence
+						:scene scene))
+	  (json:decode-json (open (responses-path sequence scene)))))
 
-(defstruct (response-word
-	     (:print-function 
-	      (lambda (struct stream depth)
-		(declare (ignore depth))
-		  (format stream "~:[~a~;~a (~a)~]" 
-			  (response-word-object-binding struct)
-			  (response-word-text struct)
-			  (response-word-object-binding struct)))))
+(defstruct response-word
+#|  (:print-function 
+   (lambda (struct stream depth)
+     (declare (ignore depth))
+     (format stream "~:[~a~;~a (~a)~]" 
+	     (response-word-object-binding struct)
+	     (response-word-text struct)
+	     (response-word-object-binding struct))))
+|#
   text
-  object-binding)
+  object-binding
+  object)
 
 (defstruct (response
 	     (:print-function 
 	      (lambda (struct stream depth)
 		(declare (ignore depth))
 		(format stream "~A" (response-word-list struct)))))
+  sequence
+  scene
   word-list
   id
   string)
 
-(defun word-from-json (json)
-  (make-response-word :text (lookup json :word)
-	     :object-binding (lookup json :object--binding)))
+(defun word-from-json (json &key sequence)
+  (let ((object-index (lookup json :object--binding)))
+    (make-response-word :text (lookup json :word)
+			:object-binding object-index
+			:object (when object-index
+				  (object-schematic sequence object-index)))))
 
-(defun response-from-json (json)
-  (make-response :word-list (mapcar #'word-from-json (lookup json :word--list))
+
+(defvar *objects* (make-hash-table :test #'equal))
+
+(defun clear-objects ()
+  (setf *objects* (make-hash-table :test #'equal)))
+  
+(defun object-schematic (sequence scene)
+  (last-object (scene-schematic (or (gethash (list sequence scene)
+					     *objects*)
+				    (setf (gethash (list sequence scene)
+						   *objects*)
+					  (read-scene sequence scene))))))
+
+(defun response-from-json (json &key sequence scene)
+  (make-response :word-list (mapcar #'(lambda (json)
+					(word-from-json json 
+							:sequence sequence))
+				    (lookup json :word--list))
 		 :id (lookup json :id)
-		 :string (lookup json :string)))
-
-
+		 :string (lookup json :string)
+		 :sequence sequence
+		 :scene scene))
 
 ;;;; scene functions
 (defstruct scene
@@ -145,6 +171,12 @@
   (loop for x in list
         while (funcall pred x)
         collect x))
+
+(defun take (n seq)
+  (loop for x in seq
+       while (>= (decf n) 0)
+       collect x))
+	 
 
 (defstruct partition
   key
@@ -518,7 +550,7 @@ to compare key values. transform will be applied to each element in the partitio
 	      scene-classes)
 	scene-classes)))
 
-
+#|
 (defun train-classes-by-feature (scene-list &key 
 				 schematic-key-fn 
 				 parse-tree-winnowing-fn 
@@ -545,6 +577,7 @@ to compare key values. transform will be applied to each element in the partitio
 					    :ht-skimming-fn ht-skimming-fn))
 	    
 	    feature-partition)))
+|#
 
 (defun ensure-list (o)
   (if (listp o) 
@@ -556,7 +589,7 @@ to compare key values. transform will be applied to each element in the partitio
   (remove-if #'null (mapcar parse-tree-winnowing-fn
 			    (scene-parse-forest scene))))
 
-(defun train-classes-by-feature1 (scene-list &key
+(defun train-classes-by-feature (scene-list &key
 				  feature-fn
 				  winnowing-fn
 				  ht-skimming-fn)
@@ -574,8 +607,6 @@ to compare key values. transform will be applied to each element in the partitio
 						   (winnow-scene (cdr feature-scene-pair)
 								 winnowing-fn))))
 	   (total-instance-count (reduce #'+ (mapcar #'count-feature-instances partitions))))
- ; (print scene-feature-list)
-      (print partitions)
       (mapcar (lambda (partition)
 					; partition key : the feature 
 					; partition value : lists of feature bags from parse-tree-winnowing-fn, 
@@ -593,27 +624,27 @@ to compare key values. transform will be applied to each element in the partitio
 
 (defun train-classes-shape-subject (scene-list)
   (train-classes-by-feature scene-list 
-			    :parse-tree-winnowing-fn #'words-in-subject-filter
-			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-shape (last-object scm))))))
+			    :winnowing-fn #'words-in-subject-filter
+			    :feature-fn #'(lambda (scene)
+						  (object-shape (last-object (scene-schematic scene))))))
 
 (defun train-classes-color-all (scene-list)
   (train-classes-by-feature scene-list 
-			    :parse-tree-winnowing-fn #'words-in-innermost-np
-			    :schematic-key-fn #'(lambda (scm)
-						  (mapcar #'object-color (objects scm)))))
+			    :winnowing-fn #'words-in-innermost-np
+			    :feature-fn #'(lambda (scene)
+						  (mapcar #'object-color (objects (scene-schematic scene))))))
 
 (defun train-classes-color-subject (scene-list)
   (train-classes-by-feature scene-list 
-			    :parse-tree-winnowing-fn #'words-in-subject-filter
-			    :schematic-key-fn #'(lambda (scm)
-						  (list (object-color (last-object scm))))))
+			    :winnowing-fn #'words-in-subject-filter
+			    :feature-fn #'(lambda (scene)
+					    (object-color (last-object (scene-schematic scene))))))
 
 (defun train-classes-shape-all (scene-list)
   (train-classes-by-feature scene-list 
-			    :parse-tree-winnowing-fn #'words-in-innermost-np
-			    :schematic-key-fn #'(lambda (scm)
-						  (mapcar #'object-shape (objects scm)))))
+			    :winnowing-fn #'words-in-innermost-np
+			    :feature-fn #'(lambda (scene)
+						  (mapcar #'object-shape (objects (scene-schematic scene))))))
 
 (defun most-common-features-class (class &optional (n 3))
   (reverse (mapcar #'car (last (reverse (sort-ht-descending (nbc-class-distribution class))) n))))
@@ -748,12 +779,13 @@ to compare key values. transform will be applied to each element in the partitio
 
 (defstruct object-reference
   binding ; object referred to 
+  object-schematic 
   words ; a list of symbols, not strings
 )
 
 (defstruct classifier-stats
   id
-  vocabulary-size
+  avg-vocabulary-size
   (recognized-instances-count 0)
   (total-instances-count 0)
 )
@@ -763,12 +795,22 @@ to compare key values. transform will be applied to each element in the partitio
 		 (mapcar (lambda (partition) 
 			   (make-object-reference
 			    :binding (partition-key partition)
+			    :object-schematic (response-word-object 
+					       (first (partition-values partition)))
 			    :words (mapcar (lambda (response-word)
-					     (intern (string-upcase (response-word-text response-word))))
+					     (intern (string-upcase 
+						      (response-word-text response-word))))
 					   (partition-values partition))))
-			 (partition-sequence #'response-word-object-binding (response-word-list resp)))))
+			 (partition-sequence #'response-word-object-binding
+					     (response-word-list resp)))))
 
-(defun proof-sequence (sequence &key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+(defun proof-sequence (sequence &key override-training-scenes override-classes success-test (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+					; sequence - the index of the sequence to proof
+					; success-test - a function that takes a classifier struct and object-reference struct, returns true iff they match. If omitted, success is judged on classifier label matching object-reference-binding
+					; discount-most-recent - if non-nil, will not classify objects that were just added in a scene
+					; verbose-level - 0-2
+					; sampling-rate - rate at which to sample responses from scenes
+					; seed - allows deterministic sampling
   (let* ((num-scenes (sequence-length sequence))
 	 (training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
 	 (sequence-stats (make-hash-table :test #'equal))
@@ -776,11 +818,13 @@ to compare key values. transform will be applied to each element in the partitio
 	 (sequence-total-count 0))
 					; Go through all scenes, running accuracy figures on each
     (dolist (scene (range 0 (1- num-scenes)))
-      (let* ((training-scenes (read-scenes-sequence sequence 
-						    :num-to-read (1+ scene)
-						    :sampling-rate sampling-rate
-						    :seed seed))
-	     (classes (funcall training-fn training-scenes))
+      (let* ((training-scenes (or override-training-scenes 
+				  (read-scenes-sequence sequence 
+							:num-to-read (1+ scene)
+							:sampling-rate sampling-rate
+							:seed seed)))
+	     (classes (or override-classes
+			  (funcall training-fn training-scenes)))
 	     (goldstandard (mapcan #'group-response-words-by-object 
 				   (read-responses sequence scene)))
 	     (scene-match-count 0)
@@ -789,7 +833,7 @@ to compare key values. transform will be applied to each element in the partitio
 	     (object-label (nbc-class-label class))
 	     (stats (make-classifier-stats
 		     :id (list sequence object-label)
-		     :vocabulary-size (hash-table-count (nbc-class-distribution class)))))
+		     :avg-vocabulary-size (hash-table-count (nbc-class-distribution class)))))
 					; store in sequence-stats just by label
 	(unless (and discount-most-recent (= scene (1- num-scenes)))
 	  (setf (gethash scene sequence-stats) stats))
@@ -805,8 +849,11 @@ to compare key values. transform will be applied to each element in the partitio
 			  (object-reference-words object-reference)
 			  (object-reference-binding object-reference)
 			  (if classification (nbc-class-label classification))))
-	      (if (and classification (eq (nbc-class-label classification)
-					  (object-reference-binding object-reference)))
+	      (if (and classification 
+		       (if success-test
+			   (funcall success-test classification object-reference)
+			   (eq (nbc-class-label classification)
+			       (object-reference-binding object-reference))))
 		  (progn
 					; increase match for this scene
 		    (incf scene-match-count)
@@ -824,10 +871,10 @@ to compare key values. transform will be applied to each element in the partitio
 	(incf sequence-match-count scene-match-count)
 	(incf sequence-total-count scene-total-count)))
     (make-classifier-stats :id sequence
-			   :vocabulary-size (funcall #'avg (maphashl (lambda (k v)
-								       (declare (ignore k))
-								       (classifier-stats-vocabulary-size v))
-								     sequence-stats))
+			   :avg-vocabulary-size (funcall #'avg (maphashl (lambda (k v)
+									   (declare (ignore k))
+									   (classifier-stats-avg-vocabulary-size v))
+									 sequence-stats))
 			   :recognized-instances-count sequence-match-count
 			   :total-instances-count sequence-total-count)))
   
@@ -843,12 +890,31 @@ to compare key values. transform will be applied to each element in the partitio
 					      :seed seed)))
 	(incf matched (classifier-stats-recognized-instances-count classifier-stats))
 	(incf total (classifier-stats-total-instances-count classifier-stats))
-	(push (classifier-stats-vocabulary-size classifier-stats) avg-vocabs)))
+	(push (classifier-stats-avg-vocabulary-size classifier-stats) avg-vocabs)))
     (format t "~A of ~A (~$) overall" matched total (/ matched total))
     (make-classifier-stats :id 'all
-			   :vocabulary-size (avg avg-vocabs)
+			   :avg-vocabulary-size (avg avg-vocabs)
 			   :recognized-instances-count matched
 			   :total-instances-count total)))
+
+(defun read-responses-all ()
+    (mapcan (lambda (sequence)
+	      (mapcan (lambda (scene)
+			(read-responses sequence scene))
+		      (range 0 (1- (sequence-length sequence)))))
+     
+     (range 1 14)))
+
+(defun proof-all-feature (feature-fn
+			  &key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+  (let* ((scenes (read-scenes-all :sampling-rate sampling-rate
+				  :seed seed))
+	 (classes (train-classes-by-feature scenes 
+					    :feature-fn 
+					    (compose feature-fn #'last-object #'scene-schematic)))
+	 (goldstandard (mapcan #'group-response-words-by-object 
+				   (read-responses-all)))))
+)
   
 (defun learning-curves (&key (discount-most-recent t) (seed 1) (resolution 20))
   (let* ((sampling-rates (range 0 1 (/ 1 resolution))) 
@@ -858,7 +924,7 @@ to compare key values. transform will be applied to each element in the partitio
 					     :seed seed))
 				sampling-rates)))
     (series-graph (make-series
-		   :x (mapcar #'classifier-stats-vocabulary-size proof-results)
+		   :x (mapcar #'classifier-stats-avg-vocabulary-size proof-results)
 		   :y (mapcar (lambda (class)
 				(/ (classifier-stats-recognized-instances-count class)
 				   (if (> (classifier-stats-total-instances-count class) 0)
