@@ -596,7 +596,8 @@ to compare key values. transform will be applied to each element in the partitio
 (defun train-classes-by-feature (scene-list &key
 				 feature-fn
 				 winnowing-fn
-				 ht-skimming-fn)
+				 (ht-skimming-fn #'(lambda (ht) 
+						     (skim-ht-threshold ht *ht-min-threshold*))))
   (labels ((count-feature-instances (partition)
 	     (reduce #'+ (mapcar #'length (partition-values partition))))
 	   (features-cross-scenes (scene)
@@ -918,64 +919,84 @@ to compare key values. transform will be applied to each element in the partitio
      (range 1 14)))
 
 (defun proof-all-feature (feature-fn
-			  &key (training-style :all) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+			  &key (training-style :inner-nps) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
   (let* ((scenes (read-scenes-all :sampling-rate sampling-rate
 				  :seed seed))
 	 (classes (train-classes-by-feature scenes 
 					    :feature-fn 
-					    (cond ((eq training-style :all)
+					    (cond ((eq training-style :inner-nps)
 						   (lambda (scene)
 						     (mapcar feature-fn (objects (scene-schematic scene)))))
-						  ((eq training-style :subject)
-						   (compose feature-fn #'last-object #'scene-schematic)))
+						  ((eq training-style :subjects)
+						   (compose feature-fn #'last-object #'scene-schematic))
+						  ((eq training-style :all-words)
+						   (lambda (scene)
+						     (mapcar feature-fn (objects (scene-schematic scene))))))
 					    :winnowing-fn
-					    (cond ((eq training-style :all) #'words-in-innermost-np)
-						  ((eq training-style :subject) #'words-in-subject-filter))))
+					    (cond ((eq training-style :inner-nps) #'words-in-innermost-np)
+						  ((eq training-style :subjects) #'words-in-subject-filter)
+						  ((eq training-style :all-words)
+						   #'words-from-tree))))
 	 (goldstandard (mapcan #'group-response-words-by-object 
 			       (read-responses-all)))
 	 (feature-groups (partition-set goldstandard :key (compose feature-fn #'object-reference-schematic))))
 					; (print classes)
-    (mapcar (lambda (feature-group)
-	      (when (> verbose-level 0)
-		(format t "proofing ~A~%" (partition-key feature-group)))
-	      (let ((num-matches 0)
-		    (num-instances 0))
-		(dolist (object-reference (partition-values feature-group))
-		  (let ((classification (nbc-classify (object-reference-words object-reference)
-						      classes)))
-		    (unless (and discount-most-recent
-				 (= (object-reference-binding object-reference)
-				    (1- (sequence-length (object-reference-sequence object-reference)))))
-		      (when (> verbose-level 1)
-			(format t "~A [~A] -> ~A~%"
-				(object-reference-words object-reference)
-				(partition-key feature-group)
-				(nbc-class-label classification)))
-		      (if (equal (nbc-class-label classification)
-				 (partition-key feature-group))
+    (let ((retval    (mapcar (lambda (feature-group)
+			       (when (> verbose-level 0)
+				 (format t "proofing ~A~%" (partition-key feature-group)))
+			       (let ((num-matches 0)
+				     (num-instances 0))
+				 (dolist (object-reference (partition-values feature-group))
+				   (let ((classification (nbc-classify (object-reference-words object-reference)
+								       classes)))
+				     (unless (and discount-most-recent
+						  (= (object-reference-binding object-reference)
+						     (1- (sequence-length (object-reference-sequence object-reference)))))
+				       (when (> verbose-level 1)
+					 (format t "~A [~A] -> ~A~%"
+						 (object-reference-words object-reference)
+						 (partition-key feature-group)
+						 (nbc-class-label classification)))
+				       (if (equal (nbc-class-label classification)
+						  (partition-key feature-group))
 			  
-			  (incf num-matches))
-		      (incf num-instances))))
-		(if (> verbose-level 0)
-		    (format t "matched ~A of ~A (~$)~%" 
-			    num-matches
-			    num-instances
-			    (/ num-matches num-instances)))
-		(make-classifier-stats :id (partition-key feature-group)
-				       :avg-vocabulary-size (hash-table-count 
-							     (nbc-class-distribution (find (partition-key feature-group)
+					   (incf num-matches))
+				       (incf num-instances))))
+				 (if (> verbose-level 0)
+				     (format t "matched ~A of ~A (~$)~%" 
+					     num-matches
+					     num-instances
+					     (/ num-matches num-instances)))
+				 (make-classifier-stats :id (partition-key feature-group)
+							:avg-vocabulary-size (hash-table-count 
+									      (nbc-class-distribution (find (partition-key feature-group)
 											   
-											   classes
-											   :key #'nbc-class-label)))
-				       :sampling-rate sampling-rate
-				       :recognized-instances-count num-matches
-				       :total-instances-count num-instances)))
-	    feature-groups)))
+													    classes
+													    :key #'nbc-class-label)))
+							:sampling-rate sampling-rate
+							:recognized-instances-count num-matches
+							:total-instances-count num-instances)))
+			     feature-groups)))
+      (let ((recognized	       
+	     (reduce #'+ (mapcar #'classifier-stats-recognized-instances-count retval)))
+	    
+	    (total
+	     (reduce #'+ (mapcar #'classifier-stats-total-instances-count retval))))
+	(format t "~$: overall ~A of ~A (~$)~%"
+		sampling-rate
+		recognized
+		total
+		(if (> total 0)
+		    
+		    (/ recognized total)
+		    "--")))
+      retval)))
 
-(defun learning-curves-feature (feature-fn &key (training-style :all) 
+
+(defun learning-curves-feature (feature-fn &key (training-style :inner-nps) 
 				(discount-most-recent t)
 				(seed 1) 
-				(verbose-level 1)
+				(verbose-level 0)
 				(resolution 20))
   (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution))))
 	 (proof-results (mapcar (lambda (p)
