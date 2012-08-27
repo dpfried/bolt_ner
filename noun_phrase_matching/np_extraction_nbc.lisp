@@ -7,7 +7,6 @@
   (with-open-file (file filename)
     (sample (read file nil) sampling-rate :seed seed)))
 
-
 (defparameter *base-path* "~/bolt_gt/dumps_raw/")
 
 (defparameter *responses-path* "~/Dropbox/bolt/blockworld/annotations/")
@@ -463,6 +462,7 @@ to compare key values. transform will be applied to each element in the partitio
   (/ (1+ (gethash feature class-distribution 0))
      (+ (sum-ht-values class-distribution) size-of-feature-domain)))
 
+
 (defstruct nbc-class
   label ; can be anything
   distribution ; a hash table of frequencies
@@ -481,14 +481,16 @@ to compare key values. transform will be applied to each element in the partitio
    feature-bag -- a list of features present in the instance we're classifying
    class-distribution -- a hash table that counts the frequencies of features in the class we're scoring on
    size-of-feature-domain -- the number of possible features, used for smoothing"
-  (let* ((probs-list (mapcar #'(lambda (feature)
-				 (log (laplace-smoothed-probability feature 
-								    class-distribution
-								    size-of-feature-domain)))
-			     feature-bag))
-	 (product (if probs-list (reduce #'+ probs-list) nil))
-	 (likelihood (if product (exp product) 0)))
-    (* class-prior likelihood)))
+  (if (= size-of-feature-domain 0) 
+      0
+      (let* ((probs-list (mapcar #'(lambda (feature)
+				     (log (laplace-smoothed-probability feature 
+									class-distribution
+									size-of-feature-domain)))
+				 feature-bag))
+	     (product (if probs-list (reduce #'+ probs-list) nil))
+	     (likelihood (if product (exp product) 0)))
+	(* class-prior likelihood))))
 
 (defun nbc-score-feature-bag (feature-bag classes)
   (let ((size-of-feature-domain (hash-table-count
@@ -592,9 +594,9 @@ to compare key values. transform will be applied to each element in the partitio
 			    (scene-parse-forest scene))))
 
 (defun train-classes-by-feature (scene-list &key
-				  feature-fn
-				  winnowing-fn
-				  ht-skimming-fn)
+				 feature-fn
+				 winnowing-fn
+				 ht-skimming-fn)
   (labels ((count-feature-instances (partition)
 	     (reduce #'+ (mapcar #'length (partition-values partition))))
 	   (features-cross-scenes (scene)
@@ -618,8 +620,10 @@ to compare key values. transform will be applied to each element in the partitio
 			   (apply #'append feature-list)) 
 			 (partition-values partition))
 		 :label (partition-key partition)
-		 :prior (/ (count-feature-instances partition)
-			   total-instance-count)
+		 :prior (if (> total-instance-count 0) 
+			    (/ (count-feature-instances partition)
+			       total-instance-count)
+			    1)
 		 :ht-skimming-fn ht-skimming-fn))
 	      partitions))))
 
@@ -789,6 +793,7 @@ to compare key values. transform will be applied to each element in the partitio
 (defstruct classifier-stats
   id
   avg-vocabulary-size
+  sampling-rate
   (recognized-instances-count 0)
   (total-instances-count 0)
 )
@@ -837,6 +842,7 @@ to compare key values. transform will be applied to each element in the partitio
 	     (object-label (nbc-class-label class))
 	     (stats (make-classifier-stats
 		     :id (list sequence object-label)
+		     :sampling-rate sampling-rate
 		     :avg-vocabulary-size (hash-table-count (nbc-class-distribution class)))))
 					; store in sequence-stats just by label
 	(unless (and discount-most-recent (= scene (1- num-scenes)))
@@ -879,6 +885,7 @@ to compare key values. transform will be applied to each element in the partitio
 									   (declare (ignore k))
 									   (classifier-stats-avg-vocabulary-size v))
 									 sequence-stats))
+			   :sampling-rate sampling-rate
 			   :recognized-instances-count sequence-match-count
 			   :total-instances-count sequence-total-count)))
   
@@ -899,6 +906,7 @@ to compare key values. transform will be applied to each element in the partitio
     (make-classifier-stats :id 'all
 			   :avg-vocabulary-size (avg avg-vocabs)
 			   :recognized-instances-count matched
+			   :sampling-rate sampling-rate
 			   :total-instances-count total)))
 
 (defun read-responses-all ()
@@ -910,49 +918,96 @@ to compare key values. transform will be applied to each element in the partitio
      (range 1 14)))
 
 (defun proof-all-feature (feature-fn
-			  &key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+			  &key (training-style :all) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
   (let* ((scenes (read-scenes-all :sampling-rate sampling-rate
 				  :seed seed))
 	 (classes (train-classes-by-feature scenes 
 					    :feature-fn 
-					    (compose feature-fn #'last-object #'scene-schematic)
+					    (cond ((eq training-style :all)
+						   (lambda (scene)
+						     (mapcar feature-fn (objects (scene-schematic scene)))))
+						  ((eq training-style :subject)
+						   (compose feature-fn #'last-object #'scene-schematic)))
 					    :winnowing-fn
-					    #'words-in-subject-filter))
+					    (cond ((eq training-style :all) #'words-in-innermost-np)
+						  ((eq training-style :subject) #'words-in-subject-filter))))
 	 (goldstandard (mapcan #'group-response-words-by-object 
 			       (read-responses-all)))
 	 (feature-groups (partition-set goldstandard :key (compose feature-fn #'object-reference-schematic))))
-    (dolist (feature-group feature-groups)
-      (format t "proofing ~A~%" (partition-key feature-group))
-      (let ((num-matches 0)
-	    (num-instances 0))
-	(dolist (object-reference (partition-values feature-group))
-	  (let ((classification (nbc-classify (object-reference-words object-reference)
-					      classes)))
-	    (unless (and discount-most-recent
-			 (= (object-reference-binding object-reference)
-			    (1- (sequence-length (object-reference-sequence object-reference)))))
-	      (if (> verbose-level 1)
-		  (format t "~A [~A] -> ~A~%"
-			  (object-reference-words object-reference)
-			  (partition-key feature-group)
-			  (nbc-class-label classification)))
-	      (if (equal (nbc-class-label classification)
-			 (partition-key feature-group))
-		  
-		  (incf num-matches))
-	      (incf num-instances))))
-	(if (> verbose-level 0)
-	    (format t "matched ~A of ~A (~$)" 
-		    num-matches
-		    num-instances
-		    (/ num-matches num-instances)))
-	))))
-  
-(defun learning-curves (&key (discount-most-recent t) (seed 1) (resolution 20))
-  (let* ((sampling-rates (range 0 1 (/ 1 resolution))) 
+					; (print classes)
+    (mapcar (lambda (feature-group)
+	      (when (> verbose-level 0)
+		(format t "proofing ~A~%" (partition-key feature-group)))
+	      (let ((num-matches 0)
+		    (num-instances 0))
+		(dolist (object-reference (partition-values feature-group))
+		  (let ((classification (nbc-classify (object-reference-words object-reference)
+						      classes)))
+		    (unless (and discount-most-recent
+				 (= (object-reference-binding object-reference)
+				    (1- (sequence-length (object-reference-sequence object-reference)))))
+		      (when (> verbose-level 1)
+			(format t "~A [~A] -> ~A~%"
+				(object-reference-words object-reference)
+				(partition-key feature-group)
+				(nbc-class-label classification)))
+		      (if (equal (nbc-class-label classification)
+				 (partition-key feature-group))
+			  
+			  (incf num-matches))
+		      (incf num-instances))))
+		(if (> verbose-level 0)
+		    (format t "matched ~A of ~A (~$)~%" 
+			    num-matches
+			    num-instances
+			    (/ num-matches num-instances)))
+		(make-classifier-stats :id (partition-key feature-group)
+				       :avg-vocabulary-size (hash-table-count 
+							     (nbc-class-distribution (find (partition-key feature-group)
+											   
+											   classes
+											   :key #'nbc-class-label)))
+				       :sampling-rate sampling-rate
+				       :recognized-instances-count num-matches
+				       :total-instances-count num-instances)))
+	    feature-groups)))
+
+(defun learning-curves-feature (feature-fn &key (training-style :all) 
+				(discount-most-recent t)
+				(seed 1) 
+				(verbose-level 1)
+				(resolution 20))
+  (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution))))
+	 (proof-results (mapcar (lambda (p)
+				  (proof-all-feature
+				   feature-fn
+				   :training-style training-style
+				   :discount-most-recent discount-most-recent
+				   :verbose-level verbose-level
+				   :sampling-rate p
+				   :seed seed))
+				sampling-rates))
+	 (results-per-class (partition-set (apply #'append proof-results)
+					   :key #'classifier-stats-id))
+	 (series-list (mapcar (lambda (partition) 
+				(let ((results-list (sort (partition-values partition) #'< :key #'classifier-stats-sampling-rate)))
+				  (make-series
+				   :x (mapcar #'classifier-stats-avg-vocabulary-size results-list)
+				   :y (mapcar (lambda (stats)
+						(/ (classifier-stats-recognized-instances-count stats)
+						   (if (> (classifier-stats-total-instances-count stats) 0)
+						       (classifier-stats-total-instances-count stats)
+						       1)))
+					      results-list))))
+			      results-per-class)))
+    (apply #'series-graph series-list)))
+
+(defun learning-curves (&key (discount-most-recent t) (verbose-level 1) (seed 1) (resolution 20))
+  (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution)))) 
 	 (proof-results (mapcar (lambda (p)
 				  (proof-all :discount-most-recent discount-most-recent
 					     :sampling-rate p
+					     :verbose-level verbose-level
 					     :seed seed))
 				sampling-rates)))
     (series-graph (make-series
