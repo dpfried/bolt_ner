@@ -1023,7 +1023,7 @@ to compare key values. transform will be applied to each element in the partitio
 						       1)))
 					      results-list))))
 			      results-per-class)))
-    (apply #'series-graph series-list)))
+    (series-graph series-list)))
 
 (defun learning-curves (&key (discount-most-recent t) (verbose-level 1) (seed 1) (resolution 20))
   (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution)))) 
@@ -1033,14 +1033,14 @@ to compare key values. transform will be applied to each element in the partitio
 					     :verbose-level verbose-level
 					     :seed seed))
 				sampling-rates)))
-    (series-graph (make-series
-		   :x (mapcar #'classifier-stats-avg-vocabulary-size proof-results)
-		   :y (mapcar (lambda (class)
-				(/ (classifier-stats-recognized-instances-count class)
-				   (if (> (classifier-stats-total-instances-count class) 0)
-				       (classifier-stats-total-instances-count class)
-				       1)))
-			      proof-results)))))
+    (series-graph (list (make-series
+		    :x (mapcar #'classifier-stats-avg-vocabulary-size proof-results)
+		    :y (mapcar (lambda (class)
+				 (/ (classifier-stats-recognized-instances-count class)
+				    (if (> (classifier-stats-total-instances-count class) 0)
+					(classifier-stats-total-instances-count class)
+					1)))
+			       proof-results))))))
 
 (defun sample (lst sampling-rate &key seed)
   (let ((rs (if seed 
@@ -1058,9 +1058,11 @@ to compare key values. transform will be applied to each element in the partitio
   x
   y)
 
-(defun series-graph (&rest series)
-  (let ((w (cl-plplot:basic-window)))
-    (dolist (s series)
+(defun series-graph (series-list &key x-label y-label title (y-min 0) (y-max 1))
+  (let ((w (cl-plplot:basic-window :title title :x-label x-label :y-label y-label
+				   :y-axis-min y-min 
+				   :y-axis-max y-max)))
+    (dolist (s series-list)
       (let* ((xa (map 'vector #'identity (series-x s)))
 	     (ya (map 'vector #'identity (series-y s)))
 	     (ba (cl-plplot:new-x-y-plot xa ya)))
