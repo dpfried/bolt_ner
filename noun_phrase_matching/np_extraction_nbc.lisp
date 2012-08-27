@@ -931,12 +931,14 @@ to compare key values. transform will be applied to each element in the partitio
 						   (compose feature-fn #'last-object #'scene-schematic))
 						  ((eq training-style :all-words)
 						   (lambda (scene)
-						     (mapcar feature-fn (objects (scene-schematic scene))))))
+						     (mapcar feature-fn (objects (scene-schematic scene)))))
+						  (t (error "unkown training-style")))
 					    :winnowing-fn
 					    (cond ((eq training-style :inner-nps) #'words-in-innermost-np)
 						  ((eq training-style :subjects) #'words-in-subject-filter)
 						  ((eq training-style :all-words)
-						   #'words-from-tree))))
+						   #'words-from-tree)
+						  (t (error "unkown training style")))))
 	 (goldstandard (mapcan #'group-response-words-by-object 
 			       (read-responses-all)))
 	 (feature-groups (partition-set goldstandard :key (compose feature-fn #'object-reference-schematic))))
@@ -998,7 +1000,7 @@ to compare key values. transform will be applied to each element in the partitio
 				(seed 1) 
 				(verbose-level 0)
 				(resolution 20))
-  (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution))))
+  (let* ((sampling-rates (range 0 1 (/ 1 resolution)))
 	 (proof-results (mapcar (lambda (p)
 				  (proof-all-feature
 				   feature-fn
