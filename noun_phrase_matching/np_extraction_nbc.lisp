@@ -534,7 +534,7 @@ to compare key values. transform will be applied to each element in the partitio
 ;;;; features. Labels and creates a prior for each class 
 ;;;; too, this behavior varies from function to function
 
-(defparameter *ht-min-threshold* 1)
+(defparameter *ht-min-threshold* 3)
 
 (defun train-classes-subject-isolation (scene-list &key ground-scene 
 					(ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
@@ -794,6 +794,7 @@ to compare key values. transform will be applied to each element in the partitio
 (defstruct classifier-stats
   id
   avg-vocabulary-size
+  vocabulary-instances
   sampling-rate
   (recognized-instances-count 0)
   (total-instances-count 0)
@@ -844,7 +845,8 @@ to compare key values. transform will be applied to each element in the partitio
 	     (stats (make-classifier-stats
 		     :id (list sequence object-label)
 		     :sampling-rate sampling-rate
-		     :avg-vocabulary-size (hash-table-count (nbc-class-distribution class)))))
+		     :avg-vocabulary-size (hash-table-count (nbc-class-distribution class))
+		     :vocabulary-instances (sum-ht-values (nbc-class-distribution class)))))
 					; store in sequence-stats just by label
 	(unless (and discount-most-recent (= scene (1- num-scenes)))
 	  (setf (gethash scene sequence-stats) stats))
@@ -886,6 +888,10 @@ to compare key values. transform will be applied to each element in the partitio
 									   (declare (ignore k))
 									   (classifier-stats-avg-vocabulary-size v))
 									 sequence-stats))
+			   :vocabulary-instances (funcall #'avg (maphashl (lambda (k v)
+									    (declare (ignore k))
+(classifier-stats-vocabulary-instances v))
+sequence-stats))
 			   :sampling-rate sampling-rate
 			   :recognized-instances-count sequence-match-count
 			   :total-instances-count sequence-total-count)))
@@ -893,7 +899,8 @@ to compare key values. transform will be applied to each element in the partitio
 (defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
   (let ((matched 0)
 	(total 0)
-	avg-vocabs)
+	avg-vocabs
+	avg-instances)
     (dolist (sequence (range 1 14))
       (let ((classifier-stats (proof-sequence sequence 
 					      :discount-most-recent discount-most-recent
@@ -902,10 +909,12 @@ to compare key values. transform will be applied to each element in the partitio
 					      :seed seed)))
 	(incf matched (classifier-stats-recognized-instances-count classifier-stats))
 	(incf total (classifier-stats-total-instances-count classifier-stats))
-	(push (classifier-stats-avg-vocabulary-size classifier-stats) avg-vocabs)))
+	(push (classifier-stats-avg-vocabulary-size classifier-stats) avg-vocabs)
+	(push (classifier-stats-vocabulary-instances classifier-stats) avg-instances)))
     (format t "~A of ~A (~$) overall" matched total (/ matched total))
     (make-classifier-stats :id 'all
 			   :avg-vocabulary-size (avg avg-vocabs)
+			   :vocabulary-instances (avg avg-instances)
 			   :recognized-instances-count matched
 			   :sampling-rate sampling-rate
 			   :total-instances-count total)))
@@ -975,6 +984,8 @@ to compare key values. transform will be applied to each element in the partitio
 											   
 													    classes
 													    :key #'nbc-class-label)))
+							:vocabulary-instances (sum-ht-values (nbc-class-distribution (find (partition-key feature-group) classes :key #'nbc-class-label)))
+							
 							:sampling-rate sampling-rate
 							:recognized-instances-count num-matches
 							:total-instances-count num-instances)))
@@ -1025,7 +1036,7 @@ to compare key values. transform will be applied to each element in the partitio
 			      results-per-class)))
     (series-graph series-list)))
 
-(defun learning-curves (&key (discount-most-recent t) (verbose-level 1) (seed 1) (resolution 20))
+(defun learning-curves (&key (discount-most-recent t) (verbose-level 0) (seed 1) (resolution 20))
   (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution)))) 
 	 (proof-results (mapcar (lambda (p)
 				  (proof-all :discount-most-recent discount-most-recent
@@ -1033,14 +1044,18 @@ to compare key values. transform will be applied to each element in the partitio
 					     :verbose-level verbose-level
 					     :seed seed))
 				sampling-rates)))
-    (series-graph (list (make-series
-		    :x (mapcar #'classifier-stats-avg-vocabulary-size proof-results)
-		    :y (mapcar (lambda (class)
-				 (/ (classifier-stats-recognized-instances-count class)
-				    (if (> (classifier-stats-total-instances-count class) 0)
-					(classifier-stats-total-instances-count class)
-					1)))
-			       proof-results))))))
+    (series-graph 
+     (list (make-series
+	    :x (mapcar #'classifier-stats-avg-vocabulary-size proof-results)
+	    :y (mapcar (lambda (class)
+			 (/ (classifier-stats-recognized-instances-count class)
+			    (if (> (classifier-stats-total-instances-count class) 0)
+				(classifier-stats-total-instances-count class)
+				1)))
+		       proof-results)))
+     :title "Object Recognition Learning Curve, Skimmed t=3"
+     :x-label "Avg Vocabulary Size / Classifier"
+     :y-label "Accuracy")))
 
 (defun sample (lst sampling-rate &key seed)
   (let ((rs (if seed 
