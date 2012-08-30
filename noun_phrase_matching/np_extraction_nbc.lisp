@@ -534,7 +534,7 @@ to compare key values. transform will be applied to each element in the partitio
 ;;;; features. Labels and creates a prior for each class 
 ;;;; too, this behavior varies from function to function
 
-(defparameter *ht-min-threshold* 3)
+(defparameter *ht-min-threshold* 1)
 
 (defun train-classes-subject-isolation (scene-list &key ground-scene 
 					(ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
@@ -911,7 +911,7 @@ sequence-stats))
 	(incf total (classifier-stats-total-instances-count classifier-stats))
 	(push (classifier-stats-avg-vocabulary-size classifier-stats) avg-vocabs)
 	(push (classifier-stats-vocabulary-instances classifier-stats) avg-instances)))
-    (format t "~A of ~A (~$) overall" matched total (/ matched total))
+    (format t "~$: ~A of ~A (~$) overall~%" sampling-rate matched total (/ matched total))
     (make-classifier-stats :id 'all
 			   :avg-vocabulary-size (avg avg-vocabs)
 			   :vocabulary-instances (avg avg-instances)
@@ -951,6 +951,7 @@ sequence-stats))
 	 (goldstandard (mapcan #'group-response-words-by-object 
 			       (read-responses-all)))
 	 (feature-groups (partition-set goldstandard :key (compose feature-fn #'object-reference-schematic))))
+    (setf *classes* classes)
 					; (print classes)
     (let ((retval    (mapcar (lambda (feature-group)
 			       (when (> verbose-level 0)
@@ -981,7 +982,6 @@ sequence-stats))
 				 (make-classifier-stats :id (partition-key feature-group)
 							:avg-vocabulary-size (hash-table-count 
 									      (nbc-class-distribution (find (partition-key feature-group)
-											   
 													    classes
 													    :key #'nbc-class-label)))
 							:vocabulary-instances (sum-ht-values (nbc-class-distribution (find (partition-key feature-group) classes :key #'nbc-class-label)))
@@ -1005,13 +1005,15 @@ sequence-stats))
 		    "--")))
       retval)))
 
+(defparameter *classes* nil)
+
 
 (defun learning-curves-feature (feature-fn &key (training-style :inner-nps) 
 				(discount-most-recent t)
 				(seed 1) 
 				(verbose-level 0)
 				(resolution 20))
-  (let* ((sampling-rates (range 0 1 (/ 1 resolution)))
+  (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution))))
 	 (proof-results (mapcar (lambda (p)
 				  (proof-all-feature
 				   feature-fn
@@ -1034,7 +1036,10 @@ sequence-stats))
 						       1)))
 					      results-list))))
 			      results-per-class)))
-    (series-graph series-list)))
+    (series-graph series-list
+		  :title (format nil "~A ~A ~A t=~A" feature-fn training-style discount-most-recent  *ht-min-threshold*)
+		  :x-label "Avg Vocabulary Size / Classifier"
+		  :y-label "Accuracy")))
 
 (defun learning-curves (&key (discount-most-recent t) (verbose-level 0) (seed 1) (resolution 20))
   (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution)))) 
@@ -1053,7 +1058,7 @@ sequence-stats))
 				(classifier-stats-total-instances-count class)
 				1)))
 		       proof-results)))
-     :title "Object Recognition Learning Curve, Skimmed t=3"
+     :title (format nil "Object RLC ~A t=~a" discount-most-recent *ht-min-threshold*)
      :x-label "Avg Vocabulary Size / Classifier"
      :y-label "Accuracy")))
 
