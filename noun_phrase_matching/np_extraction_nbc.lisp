@@ -60,7 +60,10 @@
     scene))
 
 (defun scene-parse-forest (scene)
-  (mappend #'response-parse (scene-responses scene)))
+  (response-list-parse-forest (scene-responses scene)))
+
+(defun response-list-parse-forest (response-list)
+  (mappend #'response-parse response-list))
 
 (defun read-ground-scene (&optional path)
   (setf path (or path (format nil "~A~A" *responses-path* "ground_responses.lisp")))
@@ -558,52 +561,29 @@ to compare key values. transform will be applied to each element in the partitio
 
 (defparameter *ht-min-threshold* 1)
 
-(defun train-classes-subject-isolation (scene-list &key ground-scene 
-					(ht-skimming-fn #'(lambda (ht) (skim-ht-threshold ht *ht-min-threshold*))))
-  (let ((scene-classes 
-	 (mapcar #'(lambda (scene count)
-		     (nbc-class-from-feature-bag (mappend #'words-in-subject-filter (scene-parse-forest scene))
-						 :prior (/ 1 (if ground-scene 
-								 (1+ (length scene-list))
-								 (length scene-list)))
-						 :label count
-						 :ht-skimming-fn ht-skimming-fn))
-		 scene-list (range 0 (1- (length scene-list))))))
+(defun train-classes-subject-isolation (response-list &key ground-scene
+					(ht-skimming-fn #'(lambda (ht)
+							    (skim-ht-threshold ht *ht-min-threshold*))))
+  (let* ((scene-grouped (partition-set response-list :key #'response-scene))
+    ; scene-grouped a list of partitions. Key -> scene, values -> responses from that scene
+	(scene-classes (mapcar (lambda (p)
+		  (let ((scene (partition-key p))
+			(responses (partition-values p)))
+		    (nbc-class-from-feature-bag (mappend #'words-in-subject-filter
+							 (response-list-parse-forest responses))
+						:prior (/ 1 (if ground-scene
+								(1+ (length scene-grouped))
+								(length scene-grouped)))
+						:label (scene-scene-id scene)
+						:ht-skimming-fn ht-skimming-fn)))
+			       scene-grouped)))
     (if ground-scene
-	(cons (nbc-class-from-feature-bag (mappend #'words-in-subject-filter (scene-parse-forest ground-scene))
-					  :prior (/ 1 (1+ (length scene-list)))
+	(cons (nbc-class-from-feature-bag (mappend #'words-in-subject-filter 
+						   (scene-parse-forest ground-scene))
+					  :prior (/ 1 (1+ (length scene-grouped)))
 					  :label 'ground)
 	      scene-classes)
 	scene-classes)))
-
-#|
-(defun train-classes-by-feature (scene-list &key 
-				 schematic-key-fn 
-				 parse-tree-winnowing-fn 
-				 (ht-skimming-fn #'(lambda (ht) 
-						     (skim-ht-threshold ht *ht-min-threshold*))))
-  "scene-key-fn should return a list of features from a schematic"
-  (let* ((scene-feature-list (mappend #'(lambda (scene) 
-					  (mapcar #'(lambda (feature) (cons feature scene))
-						  (funcall schematic-key-fn (scene-schematic scene))))
-				      scene-list))
-	 (feature-partition (mapcar #'partition-values
-				    (partition-set scene-feature-list 
-						   :key #'car 
-						   :transform #'cdr)))
-	 (num-classifications (reduce #'+ (mapcar #'(lambda (feature-list) (length (cdr feature-list)))
-						  feature-partition))))
-    (mapcar #'(lambda (feature-list)
-		(nbc-class-from-feature-bag (mappend #'(lambda (scene) (mappend parse-tree-winnowing-fn 
-										(scene-parse-forest scene))) 
-						     (cdr feature-list))
-					    :label (format nil "~A" (car feature-list))
-					    :prior (/ (length (cdr feature-list))
-						      num-classifications)
-					    :ht-skimming-fn ht-skimming-fn))
-	    
-	    feature-partition)))
-|#
 
 (defun ensure-list (o)
   (if (listp o) 
@@ -814,7 +794,7 @@ to compare key values. transform will be applied to each element in the partitio
 )
 
 (defun object-reference-sequence (object-reference)
-  (scene-scene-id (response-scene (object-reference-response object-reference))))
+  (scene-sequence-id (response-scene (object-reference-response object-reference))))
 
 (defstruct classifier-stats
   id
@@ -843,6 +823,8 @@ to compare key values. transform will be applied to each element in the partitio
 			     )))
 			 (partition-sequence #'response-word-object-binding
 					     (response-word-list resp)))))
+
+(defun k-fold-partition (scenes))
 
 (defun proof-sequence (sequence &key override-training-scenes override-classes success-test (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
 					; sequence - the index of the sequence to proof
