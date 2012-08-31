@@ -595,7 +595,7 @@ to compare key values. transform will be applied to each element in the partitio
   (remove-if #'null (mapcar parse-tree-winnowing-fn
 			    (scene-parse-forest scene))))
 
-(defun train-classes-by-feature (scene-list &key
+(defun train-classes-by-feature1 (response-list &key
 				 feature-fn
 				 winnowing-fn
 				 (ht-skimming-fn #'(lambda (ht) 
@@ -630,6 +630,25 @@ to compare key values. transform will be applied to each element in the partitio
 		 :ht-skimming-fn ht-skimming-fn))
 	      partitions))))
 
+(defun train-classes-by-feature (response-list &key feature-fn winnowing-fn
+				 (ht-skimming-fn #'(lambda (ht)
+						     (skim-ht-threshold ht *ht-min-threshold*))))
+  (labels ((count-feature-instances (partition)
+	     (reduce #'+ (mapcar #'length (partition-values partition))))
+	   (features-cross-scene-response-partition (partition)
+	     ; partition - key = scene, values = responses from that scene
+	     ; returns a list of (feature . (responses))
+	     (let ((scene (partition-key partition))
+		   (responses (partition-values partition)))
+	       (mapcar (lambda (feature)
+			 (cons feature responses))
+		       (ensure-list (funcall feature-fn scene))))))
+;; TODO here
+    (let* ((scene-grouped (partition-set response-list :key #'response-scene))
+	   ; scene-grouped a list of partitions. Key -> scene, values -> responses from that scene
+	   (partitions (partition-set ))
+)))
+  )
 
 (defun train-classes-shape-subject (scene-list)
   (train-classes-by-feature scene-list 
