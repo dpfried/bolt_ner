@@ -1,15 +1,17 @@
 (ql:quickload "cl-json")
 (ql:quickload "cl-plplot")
 
-;;;; logical form utilities
-(defun read-lfs (filename &key (sampling-rate 1) seed)
-  "filename should be a file that contains a list of responses. Each response is also a list - the car is the original string, and the remaining elements are the parse trees returned by TRIPS for that string"
-  (with-open-file (file filename)
-    (sample (read file nil) sampling-rate :seed seed)))
+(setf *print-circle* t)
 
+;;;; logical form utilities
 (defparameter *base-path* "~/bolt_gt/dumps_raw/")
 
-(defparameter *responses-path* "~/Dropbox/bolt/blockworld/annotations/")
+(defparameter *responses-path* "~/Dropbox/bolt/blockworld/annotations_parsed/")
+
+;; allow querying of classes after proofing
+(defparameter *classes* nil)
+
+(defparameter *scenes* nil)
 
 (defun sequence-length (sequence-index)
   (ecase sequence-index
@@ -28,49 +30,65 @@
     (13 3)
     (14 8)))
 
-(defun responses-path (sequence scene)
-  (format nil "~A~A/~A/responses.json" *responses-path* sequence scene))
+;;;; scene functions
+(defstruct scene
+  sequence-id
+  scene-id
+  schematic
+  responses
+  )
 
-(defun read-responses (sequence scene)
-  (mapcar #'(lambda (json)  (response-from-json json 
-						:sequence sequence
-						:scene scene))
-	  (json:decode-json (open (responses-path sequence scene)))))
+(defun read-scenes-sequence (sequence-id &key num-to-read)
+  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id))
+	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
 
-(defstruct response-word
-#|  (:print-function 
-   (lambda (struct stream depth)
-     (declare (ignore depth))
-     (format stream "~:[~a~;~a (~a)~]" 
-	     (response-word-object-binding struct)
-	     (response-word-text struct)
-	     (response-word-object-binding struct))))
-|#
-  text
-  object-binding
-  sequence
-  object)
+(defun read-scenes-all ()
+  (mappend (lambda (sequence-num) (read-scenes-sequence sequence-num))
+	   (range 1 14)))
 
-(defstruct (response
-	     (:print-function 
-	      (lambda (struct stream depth)
-		(declare (ignore depth))
-		(format stream "~A" (response-word-list struct)))))
-  sequence
-  scene
-  word-list
-  id
-  string)
+(defun read-schematic (sequence-id scene-id)
+  (with-open-file (file (format nil "~A~A/~A/~A" *base-path* sequence-id scene-id "schematic.lisp"))
+    (read file nil)))
 
-(defun word-from-json (json &key sequence)
-  (let ((object-index (lookup json :object--binding)))
-    (make-response-word :text (lookup json :word)
-			:sequence sequence
-			:object-binding object-index
-			:object (when object-index
-				  (object-schematic sequence object-index)))))
+(defun read-scene (sequence-id scene-id)
+  (let ((scene
+	 (make-scene
+	  :sequence-id sequence-id
+	  :scene-id scene-id
+	  :schematic (read-schematic sequence-id scene-id))))
+    (setf (scene-responses scene) (read-responses sequence-id scene-id :scene scene))
+    scene))
 
+(defun scene-parse-forest (scene)
+  (mappend #'response-parse (scene-responses scene)))
 
+(defun read-ground-scene (&optional path)
+  (setf path (or path (format nil "~A~A" *responses-path* "ground_responses.lisp")))
+  (with-open-file (file path)
+    (make-scene 
+     :schematic 'ground
+     :responses (list (make-response 
+		       :parse (read file))))))
+
+(defun camera (schematic)
+  (car schematic))
+
+(defun objects (schematic)
+  (cdr schematic))
+
+(defun last-object (schematic)
+  (car (last (objects schematic))))
+
+(defun nth-object (n schematic)
+  (nth n (objects schematic)))
+
+(defun object-shape (object)
+  (cdr (assoc 'type object)))
+
+(defun object-color (object)
+  (cdr (assoc 'color (cdr (assoc 'settings object)))))
+
+;; memoize objects to make lookups faster
 (defvar *objects* (make-hash-table :test #'equal))
 
 (defun clear-objects ()
@@ -83,72 +101,72 @@
 						   *objects*)
 					  (read-scene sequence scene))))))
 
-(defun response-from-json (json &key sequence scene)
-  (make-response :word-list (mapcar #'(lambda (json)
-					(word-from-json json 
-							:sequence sequence))
-				    (lookup json :word--list))
-		 :id (lookup json :id)
-		 :string (lookup json :string)
-		 :sequence sequence
-		 :scene scene))
 
-;;;; scene functions
-(defstruct scene
-  sequence-id
-  scene-id
-  schematic
-  parse-forest
-  )
+;; functions to load responses
+(defun responses-path (sequence scene)
+  (format nil "~A~A/~A/responses.json" *responses-path* sequence scene))
 
-(defun read-scenes-sequence (sequence-id &key num-to-read (sampling-rate 1) seed)
-  (mapcar #'(lambda (scn-id) (read-scene sequence-id scn-id :sampling-rate sampling-rate :seed seed))
-	  (range 0 (1- (or num-to-read (sequence-length sequence-id))))))
+(defun read-responses (sequence-id scene-id &key scene)
+  ; sequence-id : sequence index
+  ; scene-id : scene index
+  ; scene : the parent scene struct to link to
+  (mapcar #'(lambda (json)  (response-from-json json scene))
+	  (json:decode-json (open (responses-path sequence-id scene-id)))))
 
-(defun read-scenes-all (&key (sampling-rate 1) seed)
-  (mappend (lambda (sequence-num) (read-scenes-sequence sequence-num :sampling-rate sampling-rate :seed seed))
-	   (range 1 14)))
+(defun response-from-json (json scene)
+  (let ((response (make-response :id (lookup json :uuid)
+				 :string (lookup json :string)
+				 :scene scene
+				 :parse (aif (lookup json :parse)
+					     (read-from-string it)))))
+    (setf (response-word-list response) (mapcar #'(lambda (json)
+						    (word-from-json json 
+								    response))
+						(lookup json :word--list)))
+    response))
 
-(defun scene-lfs (sequence-id scene-id &key (base-path *base-path*) (filename "responses.parsed") (sampling-rate 1) seed)
-  "load the logical forms from a given sequence and scene"
-  (read-lfs (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename) 
-	    :sampling-rate sampling-rate :seed seed))
+(defstruct (response-word
+	     (:print-function 
+	      (lambda (struct stream depth)
+		(declare (ignore depth))
+		(format stream "(~s ~A)" 
+			(response-word-text struct)
+			(response-word-object-binding struct)))))
+  text
+  object-binding
+  response
+  object)
 
-(defun read-schematic (sequence-id scene-id &key (base-path *base-path*) (filename "schematic.lisp"))
-  (with-open-file (file (format nil "~A~A/~A/~A" base-path sequence-id scene-id filename))
-    (read file nil)))
+(defstruct (response
+	     (:print-function
+	      (lambda (struct stream depth)
+		(declare (ignore depth))
+		(format stream "#S(RESPONSE :WORD-LIST ~s :ID ~s :STRING ~s :PARSE ~s"
+			(response-word-list struct)
+			(response-id struct)
+			(response-string struct)
+			(response-parse struct)))))
+  
+  scene
+  word-list
+  id
+  string
+  parse)
 
-(defun read-scene (sequence-id scene-id &key (sampling-rate 1) (base-path *base-path*) seed)
-  (make-scene
-   :sequence-id sequence-id
-   :scene-id scene-id
-   :schematic (read-schematic sequence-id scene-id :base-path base-path)
-   :parse-forest (mappend #'cdr (scene-lfs sequence-id scene-id 
-					   :base-path base-path 
-					   :sampling-rate sampling-rate
-					   :seed seed))))
-
-(defun read-ground-scene (&optional path)
-  (setf path (or path (format nil "~A~A" *base-path* "base_obj.parsed")))
-  (make-scene
-   :parse-forest (mappend #'cdr (read-lfs path))))
-
-(defun camera (schematic)
-  (car schematic))
-
-(defun objects (schematic)
-  (cdr schematic))
-
-(defun last-object (schematic)
-  (car (last (objects schematic))))
-
-(defun object-shape (object)
-  (cdr (assoc 'type object)))
-
-(defun object-color (object)
-  (cdr (assoc 'color (cdr (assoc 'settings object)))))
+(defun word-from-json (json response)
+  (let ((object-index (lookup json :object--binding)))
+    (make-response-word :text (lookup json :word)
+			:object-binding object-index
+			:response response
+			:object (when object-index 
+				  (nth-object object-index 
+					      (scene-schematic (response-scene response)))))))
 
 ;;;; general utilities
+(defmacro aif (test-form then-form &optional else-form)
+  `(let ((it ,test-form))
+     (if it ,then-form ,else-form)))
+
 (defun compose (&rest functions)
   "Compose FUNCTIONS right-associatively, returning a function"
   #'(lambda (x)
@@ -434,10 +452,14 @@ to compare key values. transform will be applied to each element in the partitio
 	     (get-nps parse-tree)))
 
 (defun all-innermost-nps (scene-list)
-  (remove-if #'null (mapcar #'(lambda (forest) (remove-if 
-						#'(lambda (word) (member word *words-to-remove*))
-						(words-from-forest forest)))
-			    (mappend #'(lambda (scene) (mappend #'get-innermost-nps (scene-parse-forest scene))) scene-list))))
+  (remove-if #'null (mapcar #'(lambda (forest) 
+				(remove-if #'(lambda (word) 
+					       (member word *words-to-remove*))
+					   (words-from-forest forest)))
+			    (mappend #'(lambda (scene) 
+					 (mappend #'get-innermost-nps 
+						  (scene-parse-forest scene))) 
+				     scene-list))))
 
 ;;;; noun-phrase filtering
 (defun words-in-subject-filter (parse-tree)
@@ -787,9 +809,12 @@ to compare key values. transform will be applied to each element in the partitio
 (defstruct object-reference
   binding ; object referred to 
   schematic
-  sequence
+  response
   words ; a list of symbols, not strings
 )
+
+(defun object-reference-sequence (object-reference)
+  (scene-scene-id (response-scene (object-reference-response object-reference))))
 
 (defstruct classifier-stats
   id
@@ -803,15 +828,19 @@ to compare key values. transform will be applied to each element in the partitio
 (defun group-response-words-by-object (resp)
   (remove-if-not #'object-reference-binding
 		 (mapcar (lambda (partition) 
-			   (make-object-reference
-			    :binding (partition-key partition)
-			    :sequence (response-word-sequence (first (partition-values partition)))
-			    :schematic (response-word-object 
-					       (first (partition-values partition)))
-			    :words (mapcar (lambda (response-word)
-					     (intern (string-upcase 
-						      (response-word-text response-word))))
-					   (partition-values partition))))
+			  (let ((object-binding (partition-key partition))
+				(response-words (partition-values partition)))
+			    (make-object-reference
+			     :binding object-binding
+			     :response resp
+			     :schematic (response-word-object 
+					 (first response-words))
+			     :words (mapcar (lambda (response-word)
+					      (intern (string-upcase 
+						       (response-word-text response-word))))
+					    response-words)
+
+			     )))
 			 (partition-sequence #'response-word-object-binding
 					     (response-word-list resp)))))
 
@@ -831,9 +860,7 @@ to compare key values. transform will be applied to each element in the partitio
     (dolist (scene (range 0 (1- num-scenes)))
       (let* ((training-scenes (or override-training-scenes 
 				  (read-scenes-sequence sequence 
-							:num-to-read (1+ scene)
-							:sampling-rate sampling-rate
-							:seed seed)))
+							:num-to-read (1+ scene))))
 	     (classes (or override-classes
 			  (funcall training-fn training-scenes)))
 	     (goldstandard (mapcan #'group-response-words-by-object 
@@ -847,6 +874,7 @@ to compare key values. transform will be applied to each element in the partitio
 		     :sampling-rate sampling-rate
 		     :avg-vocabulary-size (hash-table-count (nbc-class-distribution class))
 		     :vocabulary-instances (sum-ht-values (nbc-class-distribution class)))))
+	(setf *classes* classes)
 					; store in sequence-stats just by label
 	(unless (and discount-most-recent (= scene (1- num-scenes)))
 	  (setf (gethash scene sequence-stats) stats))
@@ -929,8 +957,7 @@ sequence-stats))
 
 (defun proof-all-feature (feature-fn
 			  &key (training-style :inner-nps) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
-  (let* ((scenes (read-scenes-all :sampling-rate sampling-rate
-				  :seed seed))
+  (let* ((scenes (read-scenes-all))
 	 (classes (train-classes-by-feature scenes 
 					    :feature-fn 
 					    (cond ((eq training-style :inner-nps)
@@ -982,6 +1009,7 @@ sequence-stats))
 				 (make-classifier-stats :id (partition-key feature-group)
 							:avg-vocabulary-size (hash-table-count 
 									      (nbc-class-distribution (find (partition-key feature-group)
+											   
 													    classes
 													    :key #'nbc-class-label)))
 							:vocabulary-instances (sum-ht-values (nbc-class-distribution (find (partition-key feature-group) classes :key #'nbc-class-label)))
@@ -1004,8 +1032,6 @@ sequence-stats))
 		    (/ recognized total)
 		    "--")))
       retval)))
-
-(defparameter *classes* nil)
 
 
 (defun learning-curves-feature (feature-fn &key (training-style :inner-nps) 
