@@ -658,7 +658,6 @@ to compare key values. transform will be applied to each element in the partitio
 						   (winnow-response-list (cdr feature-response-pair)
 									 winnowing-fn))))
 	   (total-instance-count (apply #'+ (mapcar #'count-feature-instances partitions))))
-      (pprint partitions)
       (mapcar (lambda (partition)
 					; partition key : the feature 
 					; partition value : lists of feature bags from parse-tree-winnowing-fn, 
@@ -675,32 +674,30 @@ to compare key values. transform will be applied to each element in the partitio
 		 :ht-skimming-fn ht-skimming-fn))
 	      partitions))))
 
-(defun train-classes-shape-subject (scene-list)
-  (train-classes-by-feature scene-list 
+(defun train-classes-shape-subject (response-list)
+  (train-classes-by-feature response-list 
 			    :winnowing-fn #'words-in-subject-filter
 			    :feature-fn #'(lambda (scene)
-						  (object-shape (last-object (scene-schematic scene))))))
+						  (object-shape (last-object 
+								 (scene-schematic scene))))))
 
-(defun train-classes-color-all (scene-list)
-  (train-classes-by-feature scene-list 
+(defun train-classes-color-all (response-list)
+  (train-classes-by-feature response-list 
 			    :winnowing-fn #'words-in-innermost-np
 			    :feature-fn #'(lambda (scene)
 						  (mapcar #'object-color (objects (scene-schematic scene))))))
 
-(defun train-classes-color-subject (scene-list)
-  (train-classes-by-feature scene-list 
+(defun train-classes-color-subject (response-list)
+  (train-classes-by-feature response-list 
 			    :winnowing-fn #'words-in-subject-filter
 			    :feature-fn #'(lambda (scene)
 					    (object-color (last-object (scene-schematic scene))))))
 
-(defun train-classes-shape-all (scene-list)
-  (train-classes-by-feature scene-list 
+(defun train-classes-shape-all (response-list)
+  (train-classes-by-feature response-list 
 			    :winnowing-fn #'words-in-innermost-np
 			    :feature-fn #'(lambda (scene)
 						  (mapcar #'object-shape (objects (scene-schematic scene))))))
-
-(defun most-common-features-class (class &optional (n 3))
-  (reverse (mapcar #'car (last (reverse (sort-ht-descending (nbc-class-distribution class))) n))))
 
 #|
 (defun identify-nouns-in-parse-forest (parse-forest &rest classes)
