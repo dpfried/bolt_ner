@@ -859,93 +859,107 @@ to compare key values. transform will be applied to each element in the partitio
 			     :words (mapcar (lambda (response-word)
 					      (intern (string-upcase 
 						       (response-word-text response-word))))
-					    response-words)
-
-			     )))
+					    response-words))))
 			 (partition-sequence #'response-word-object-binding
 					     (response-word-list resp)))))
 
-(defun proof-sequence (sequence &key override-training-scenes override-classes success-test (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+(defun proof-sequence (sequence &key success-test (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed partition-fn testing-partition-p)
 					; sequence - the index of the sequence to proof
 					; success-test - a function that takes a classifier struct and object-reference struct, returns true iff they match. If omitted, success is judged on classifier label matching object-reference-binding
 					; discount-most-recent - if non-nil, will not classify objects that were just added in a scene
 					; verbose-level - 0-2
 					; sampling-rate - rate at which to sample responses from scenes
 					; seed - allows deterministic sampling
-  (let* ((num-scenes (sequence-length sequence))
-	 (training-fn (lambda (scn-list) (train-classes-subject-isolation scn-list :ground-scene (read-ground-scene))))
-	 (sequence-stats (make-hash-table :test #'equal))
-	 (sequence-match-count 0)
-	 (sequence-total-count 0))
-					; Go through all scenes, running accuracy figures on each
-    (dolist (scene (range 0 (1- num-scenes)))
-      (let* ((training-scenes (or override-training-scenes 
-				  (read-scenes-sequence sequence 
-							:num-to-read (1+ scene))))
-	     (classes (or override-classes
-			  (funcall training-fn training-scenes)))
-	     (goldstandard (mapcan #'group-response-words-by-object 
-				   (read-responses sequence scene)))
-	     (scene-match-count 0)
-	     (scene-total-count 0)
-	     (class (car (last classes)))
-	     (object-label (nbc-class-label class))
-	     (stats (make-classifier-stats
-		     :id (list sequence object-label)
-		     :sampling-rate sampling-rate
-		     :avg-vocabulary-size (hash-table-count (nbc-class-distribution class))
-		     :vocabulary-instances (sum-ht-values (nbc-class-distribution class)))))
-	(setf *classes* classes)
-					; store in sequence-stats just by label
-	(unless (and discount-most-recent (= scene (1- num-scenes)))
-	  (setf (gethash scene sequence-stats) stats))
-					; for each scene, go through the gold standard responses, classifying each labeled np
-	(dolist (object-reference goldstandard)
-					; exclude any objects that were just added in this scene, if discount-most-recent is T
-	  (unless (and discount-most-recent (= (object-reference-binding object-reference)
-					       scene))
-	    (let ((classification (nbc-classify (object-reference-words object-reference)
-						classes)))
-	      (if (and (numberp verbose-level) (> verbose-level 1))
-		  (format t "~A (~A) -> ~A~%"
-			  (object-reference-words object-reference)
-			  (object-reference-binding object-reference)
-			  (if classification (nbc-class-label classification))))
-	      (if (and classification 
-		       (if success-test
-			   (funcall success-test classification object-reference)
-			   (eq (nbc-class-label classification)
-			       (object-reference-binding object-reference))))
-		  (progn
-					; increase match for this scene
-		    (incf scene-match-count)
-					; increase match for this object
-		    (incf (classifier-stats-recognized-instances-count 
-			   (gethash (object-reference-binding object-reference) sequence-stats))))))
-					; increase total for this scene
-	    (incf scene-total-count)
-					; increase total for this object
-	    (incf (classifier-stats-total-instances-count  
-		   (gethash (object-reference-binding object-reference) sequence-stats)))))
-	(if (and (numberp verbose-level) (> verbose-level 0))
-	    (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene scene-match-count scene-total-count
-		    (if (= scene-total-count 0) "--" (/ scene-match-count scene-total-count))))
-	(incf sequence-match-count scene-match-count)
-	(incf sequence-total-count scene-total-count)))
-    (make-classifier-stats :id sequence
-			   :avg-vocabulary-size (funcall #'avg (maphashl (lambda (k v)
-									   (declare (ignore k))
-									   (classifier-stats-avg-vocabulary-size v))
-									 sequence-stats))
-			   :vocabulary-instances (funcall #'avg (maphashl (lambda (k v)
-									    (declare (ignore k))
-(classifier-stats-vocabulary-instances v))
-sequence-stats))
-			   :sampling-rate sampling-rate
-			   :recognized-instances-count sequence-match-count
-			   :total-instances-count sequence-total-count)))
+  ; partition-fn - define an equivalence class on responses. Ex (compose (lambda (x) (mod x 10)) #'response-id)
+  ; testing-partition-p - a predicate called on results of partition-fn, should return T if the response should be used for testing. Otherwise will be used for training. Ex (lambda (x) (= x 10))
   
-(defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
+  (labels ((training-fn (response-list)
+	     (train-classes-subject-isolation response-list
+					      :ground-scene (read-ground-scene))))
+    (let* ((num-scenes (sequence-length sequence))
+	   (sequence-stats (make-hash-table :test #'equal))
+	   (sequence-match-count 0)
+	   (sequence-total-count 0))
+					; Go through all scenes, running accuracy figures on each
+      (dolist (scene (range 0 (1- num-scenes)))
+	(let* ((responses (mappend #'scene-responses (read-scenes-sequence sequence 
+						 :num-to-read (1+ scene))))
+	       (partitioned-responses (partition-set responses
+				       :key partition-fn))
+	       (all-training-responses (mappend #'partition-values
+						(remove-if (compose training-partition-p
+									#'partition-key)
+							       partitioned-responses)))
+	       (testing-responses (mappend #'partition-values
+					   (remove-if-not (compose training-partition-p
+							       #'partition-key)
+						      partitioned-responses)))
+	       (sampled-training-responses (sample all-training-responses
+						   sampling-rate
+						   :seed seed))
+	       (classes (training-fn sampled-training-responses))
+	       (goldstandard (mapcan #'group-response-words-by-object 
+				     testing-responses))
+	       (scene-match-count 0)
+	       (scene-total-count 0)
+	       (class (car (last classes)))
+	       (object-label (nbc-class-label class))
+	       (stats (make-classifier-stats
+		       :id (list sequence object-label)
+		       :sampling-rate sampling-rate
+		       :avg-vocabulary-size (hash-table-count (nbc-class-distribution class))
+		       :vocabulary-instances (sum-ht-values (nbc-class-distribution class)))))
+	  (setf *classes* classes)
+					; store in sequence-stats just by label
+	  (unless (and discount-most-recent (= scene (1- num-scenes)))
+	    (setf (gethash scene sequence-stats) stats))
+					; for each scene, go through the gold standard responses, classifying each labeled np
+	  (dolist (object-reference goldstandard)
+					; exclude any objects that were just added in this scene, if discount-most-recent is T
+	    (unless (and discount-most-recent (= (object-reference-binding object-reference)
+						 scene))
+	      (let ((classification (nbc-classify (object-reference-words object-reference)
+						  classes)))
+		(if (and (numberp verbose-level) (> verbose-level 1))
+		    (format t "~A (~A) -> ~A~%"
+			    (object-reference-words object-reference)
+			    (object-reference-binding object-reference)
+			    (if classification (nbc-class-label classification))))
+		(if (and classification 
+			 (if success-test
+			     (funcall success-test classification object-reference)
+			     (eq (nbc-class-label classification)
+				 (object-reference-binding object-reference))))
+		    (progn
+					; increase match for this scene
+		      (incf scene-match-count)
+					; increase match for this object
+		      (incf (classifier-stats-recognized-instances-count 
+			     (gethash (object-reference-binding object-reference) sequence-stats))))))
+					; increase total for this scene
+	      (incf scene-total-count)
+					; increase total for this object
+	      (incf (classifier-stats-total-instances-count  
+		     (gethash (object-reference-binding object-reference) sequence-stats)))))
+	  (if (and (numberp verbose-level) (> verbose-level 0))
+	      (format t "~A ~A: identified ~A of ~A (~$)~%" sequence scene scene-match-count scene-total-count
+		      (if (= scene-total-count 0) "--" (/ scene-match-count scene-total-count))))
+	  (incf sequence-match-count scene-match-count)
+	  (incf sequence-total-count scene-total-count)))
+      (make-classifier-stats :id sequence
+			     :avg-vocabulary-size (funcall #'avg (maphashl (lambda (k v)
+									     (declare (ignore k))
+									     (classifier-stats-avg-vocabulary-size v))
+									   sequence-stats))
+			     :vocabulary-instances (funcall #'avg (maphashl (lambda (k v)
+									      (declare (ignore k))
+									      (classifier-stats-vocabulary-instances v))
+									    sequence-stats))
+			     :sampling-rate sampling-rate
+			     :recognized-instances-count sequence-match-count
+			     :total-instances-count sequence-total-count))))
+  
+(defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed partition-fn training-partition-p)
   (let ((matched 0)
 	(total 0)
 	avg-vocabs
@@ -955,7 +969,9 @@ sequence-stats))
 					      :discount-most-recent discount-most-recent
 					      :verbose-level verbose-level
 					      :sampling-rate sampling-rate
-					      :seed seed)))
+					      :seed seed
+					      :partition-fn partition-fn
+					      :training-partition-p training-partition-p)))
 	(incf matched (classifier-stats-recognized-instances-count classifier-stats))
 	(incf total (classifier-stats-total-instances-count classifier-stats))
 	(push (classifier-stats-avg-vocabulary-size classifier-stats) avg-vocabs)
@@ -968,13 +984,16 @@ sequence-stats))
 			   :sampling-rate sampling-rate
 			   :total-instances-count total)))
 
-(defun read-responses-all ()
-    (mapcan (lambda (sequence)
-	      (mapcan (lambda (scene)
-			(read-responses sequence scene))
-		      (range 0 (1- (sequence-length sequence)))))
-     
-     (range 1 14)))
+(defun cross-validation-objects (n)
+  (float (avg (mapcar (lambda (cs) 
+			(/ (classifier-stats-recognized-instances-count cs)
+			   (classifier-stats-total-instances-count cs))) 
+		      (mapcar (lambda (k) 
+				(proof-all 
+				 :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
+				 :training-partition-p (lambda (x) (not (= x k))) 
+				 :discount-most-recent t)) 
+			      (range 0 (1- n)))))))
 
 (defun proof-all-feature (feature-fn
 			  &key (training-style :inner-nps) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
@@ -1135,3 +1154,5 @@ sequence-stats))
 	     (ba (cl-plplot:new-x-y-plot xa ya)))
 	(cl-plplot:add-plot-to-window w ba)))
     (cl-plplot:render w "tk")))
+
+
