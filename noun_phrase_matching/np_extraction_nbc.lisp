@@ -144,9 +144,9 @@
 	     (:print-function
 	      (lambda (struct stream depth)
 		(declare (ignore depth))
-		(format stream "#S(RESPONSE :WORD-LIST ~s :ID ~s :STRING ~s :PARSE ~s"
-			(response-word-list struct)
+		(format stream "#S(RESPONSE :ID ~s :WORD-LIST ~s)"
 			(response-id struct)
+			(response-word-list struct)
 			(response-string struct)
 			(response-parse struct)))))
   
@@ -595,7 +595,12 @@ to compare key values. transform will be applied to each element in the partitio
   (remove-if #'null (mapcar parse-tree-winnowing-fn
 			    (scene-parse-forest scene))))
 
-(defun train-classes-by-feature1 (response-list &key
+(defun winnow-response-list (response-list parse-tree-winnowing-fn)
+  ; the list this returns is not the same length as response-list. Is this a problem?
+  (remove-if #'null (mapcar parse-tree-winnowing-fn
+			    (response-list-parse-forest response-list))))
+
+(defun train-classes-by-feature1 (scene-list &key
 				 feature-fn
 				 winnowing-fn
 				 (ht-skimming-fn #'(lambda (ht) 
@@ -643,12 +648,32 @@ to compare key values. transform will be applied to each element in the partitio
 	       (mapcar (lambda (feature)
 			 (cons feature responses))
 		       (ensure-list (funcall feature-fn scene))))))
-;; TODO here
     (let* ((scene-grouped (partition-set response-list :key #'response-scene))
 	   ; scene-grouped a list of partitions. Key -> scene, values -> responses from that scene
-	   (partitions (partition-set ))
-)))
-  )
+	   (response-feature-list (mappend #'features-cross-scene-response-partition scene-grouped))
+	   (partitions (partition-set response-feature-list
+				      :key (lambda (feature-response-pair)
+					     (car feature-response-pair))
+				      :transform (lambda (feature-response-pair)
+						   (winnow-response-list (cdr feature-response-pair)
+									 winnowing-fn))))
+	   (total-instance-count (apply #'+ (mapcar #'count-feature-instances partitions))))
+      (pprint partitions)
+      (mapcar (lambda (partition)
+					; partition key : the feature 
+					; partition value : lists of feature bags from parse-tree-winnowing-fn, 
+					; one for each scene
+		(nbc-class-from-feature-bag
+		 (mapcan (lambda (feature-list) 
+			   (apply #'append feature-list)) 
+			 (partition-values partition))
+		 :label (partition-key partition)
+		 :prior (if (> total-instance-count 0) 
+			    (/ (count-feature-instances partition)
+			       total-instance-count)
+			    1)
+		 :ht-skimming-fn ht-skimming-fn))
+	      partitions))))
 
 (defun train-classes-shape-subject (scene-list)
   (train-classes-by-feature scene-list 
@@ -842,8 +867,6 @@ to compare key values. transform will be applied to each element in the partitio
 			     )))
 			 (partition-sequence #'response-word-object-binding
 					     (response-word-list resp)))))
-
-(defun k-fold-partition (scenes))
 
 (defun proof-sequence (sequence &key override-training-scenes override-classes success-test (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
 					; sequence - the index of the sequence to proof
