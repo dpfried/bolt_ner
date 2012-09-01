@@ -887,11 +887,11 @@ to compare key values. transform will be applied to each element in the partitio
 	       (partitioned-responses (partition-set responses
 				       :key partition-fn))
 	       (all-training-responses (mappend #'partition-values
-						(remove-if (compose training-partition-p
+						(remove-if (compose testing-partition-p
 									#'partition-key)
 							       partitioned-responses)))
 	       (testing-responses (mappend #'partition-values
-					   (remove-if-not (compose training-partition-p
+					   (remove-if-not (compose testing-partition-p
 							       #'partition-key)
 						      partitioned-responses)))
 	       (sampled-training-responses (sample all-training-responses
@@ -959,7 +959,7 @@ to compare key values. transform will be applied to each element in the partitio
 			     :recognized-instances-count sequence-match-count
 			     :total-instances-count sequence-total-count))))
   
-(defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed partition-fn training-partition-p)
+(defun proof-all (&key (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed partition-fn testing-partition-p)
   (let ((matched 0)
 	(total 0)
 	avg-vocabs
@@ -971,7 +971,7 @@ to compare key values. transform will be applied to each element in the partitio
 					      :sampling-rate sampling-rate
 					      :seed seed
 					      :partition-fn partition-fn
-					      :training-partition-p training-partition-p)))
+					      :testing-partition-p testing-partition-p)))
 	(incf matched (classifier-stats-recognized-instances-count classifier-stats))
 	(incf total (classifier-stats-total-instances-count classifier-stats))
 	(push (classifier-stats-avg-vocabulary-size classifier-stats) avg-vocabs)
@@ -985,38 +985,58 @@ to compare key values. transform will be applied to each element in the partitio
 			   :total-instances-count total)))
 
 (defun cross-validation-objects (n)
-  (float (avg (mapcar (lambda (cs) 
-			(/ (classifier-stats-recognized-instances-count cs)
-			   (classifier-stats-total-instances-count cs))) 
-		      (mapcar (lambda (k) 
-				(proof-all 
-				 :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
-				 :training-partition-p (lambda (x) (not (= x k))) 
-				 :discount-most-recent t)) 
-			      (range 0 (1- n)))))))
+  (mapcar (lambda (k) 
+	    (proof-all 
+	     :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
+	     :testing-partition-p (lambda (x) (= x k)) 
+	     :discount-most-recent nil)) 
+	  (range 0 (1- n))))
+
+(defun cross-validation-feature (n feature-fn)
+  (mappend (lambda (k) 
+	     (proof-all-feature feature-fn
+				:training-style :subjects
+				:partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
+				:testing-partition-p (lambda (x) (= x k)) 
+				:discount-most-recent nil)) 
+	   (range 0 (1- n))))
 
 (defun proof-all-feature (feature-fn
-			  &key (training-style :inner-nps) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed)
-  (let* ((scenes (read-scenes-all))
-	 (classes (train-classes-by-feature scenes 
-					    :feature-fn 
-					    (cond ((eq training-style :inner-nps)
-						   (lambda (scene)
-						     (mapcar feature-fn (objects (scene-schematic scene)))))
-						  ((eq training-style :subjects)
-						   (compose feature-fn #'last-object #'scene-schematic))
-						  ((eq training-style :all-words)
-						   (lambda (scene)
-						     (mapcar feature-fn (objects (scene-schematic scene)))))
-						  (t (error "unkown training-style")))
-					    :winnowing-fn
-					    (cond ((eq training-style :inner-nps) #'words-in-innermost-np)
-						  ((eq training-style :subjects) #'words-in-subject-filter)
-						  ((eq training-style :all-words)
-						   #'words-from-tree)
-						  (t (error "unkown training style")))))
+			  &key (training-style :inner-nps) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed partition-fn testing-partition-p)
+  (let* ((responses (mappend #'scene-responses (read-scenes-all)))
+	 (partitioned-responses (partition-set responses
+					       :key partition-fn))
+	 (all-training-responses (mappend #'partition-values
+					  (remove-if (compose testing-partition-p
+							      #'partition-key)
+						     partitioned-responses)))
+	 (testing-responses (mappend #'partition-values
+				     (remove-if-not (compose testing-partition-p
+							     #'partition-key)
+						    partitioned-responses)))
+	 (sampled-training-responses (sample all-training-responses
+					     sampling-rate
+					     :seed seed))
+	 (classes 
+	  (train-classes-by-feature sampled-training-responses
+				    :feature-fn 
+				    (cond ((eq training-style :inner-nps)
+					   (lambda (scene)
+					     (mapcar feature-fn (objects (scene-schematic scene)))))
+					  ((eq training-style :subjects)
+					   (compose feature-fn #'last-object #'scene-schematic))
+					  ((eq training-style :all-words)
+					   (lambda (scene)
+					     (mapcar feature-fn (objects (scene-schematic scene)))))
+					  (t (error "unkown training-style")))
+				    :winnowing-fn
+				    (cond ((eq training-style :inner-nps) #'words-in-innermost-np)
+					  ((eq training-style :subjects) #'words-in-subject-filter)
+					  ((eq training-style :all-words)
+					   #'words-from-tree)
+					  (t (error "unkown training style")))))
 	 (goldstandard (mapcan #'group-response-words-by-object 
-			       (read-responses-all)))
+			       testing-responses))
 	 (feature-groups (partition-set goldstandard :key (compose feature-fn #'object-reference-schematic))))
     (setf *classes* classes)
 					; (print classes)
@@ -1038,7 +1058,7 @@ to compare key values. transform will be applied to each element in the partitio
 						 (nbc-class-label classification)))
 				       (if (equal (nbc-class-label classification)
 						  (partition-key feature-group))
-			  
+					   
 					   (incf num-matches))
 				       (incf num-instances))))
 				 (if (> verbose-level 0)
@@ -1049,7 +1069,7 @@ to compare key values. transform will be applied to each element in the partitio
 				 (make-classifier-stats :id (partition-key feature-group)
 							:avg-vocabulary-size (hash-table-count 
 									      (nbc-class-distribution (find (partition-key feature-group)
-											   
+													    
 													    classes
 													    :key #'nbc-class-label)))
 							:vocabulary-instances (sum-ht-values (nbc-class-distribution (find (partition-key feature-group) classes :key #'nbc-class-label)))
@@ -1154,5 +1174,3 @@ to compare key values. transform will be applied to each element in the partitio
 	     (ba (cl-plplot:new-x-y-plot xa ya)))
 	(cl-plplot:add-plot-to-window w ba)))
     (cl-plplot:render w "tk")))
-
-
