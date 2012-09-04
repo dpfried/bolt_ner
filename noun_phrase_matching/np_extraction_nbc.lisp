@@ -177,14 +177,22 @@
               :initial-value x
               :from-end t)))
 
+(defun sum (lst &key val-fn weight-fn)
+  (when lst
+    (reduce #'+ (mapcar (lambda (v) 
+			  (*
+			   (if weight-fn
+			       (funcall weight-fn v)
+			       1)
+			   (if val-fn
+			       (funcall val-fn v)
+			       v)))
+			lst))))
+
 (defun avg (lst &key val-fn weight-fn)
   (when lst
-    (let ((vals (if val-fn (mapcar val-fn lst) lst))
-	  (weights (if weight-fn 
-		       (mapcar weight-fn lst)
-		       (mapcar (lambda (x) (declare (ignore x)) 1) lst))))
-      (/ (reduce #'+ vals)
-	 (reduce #'+ weights)))))
+    (/ (sum lst :val-fn val-fn :weight-fn weight-fn)
+       (length lst))))
 
 (defun lookup (alist key)
   (cdr (assoc key alist)))
@@ -845,6 +853,18 @@ to compare key values. transform will be applied to each element in the partitio
   (recognized-instances-count 0)
   (total-instances-count 0)
 )
+
+(defun avg-classifier-stats (&rest classifier-stats)
+  (make-classifier-stats
+   :id (if (= (length (partition-set classifier-stats :key #'classifier-stats-id)) 1)
+	   (classifier-stats-id (first classifier-stats))
+	   'multiple)
+   :avg-vocabulary-size (avg classifier-stats :val-fn #'classifier-stats-avg-vocabulary-size)
+   :vocabulary-instances (avg classifier-stats :val-fn #'classifier-stats-vocabulary-instances)
+   :sampling-rate (classifier-stats-sampling-rate (first classifier-stats))
+   :recognized-instances-count (sum classifier-stats :val-fn #'classifier-stats-recognized-instances-count)
+   :total-instances-count (sum classifier-stats :val-fn #'classifier-stats-total-instances-count)))
+
     
 (defun group-response-words-by-object (resp)
   (remove-if-not #'object-reference-binding
@@ -989,26 +1009,35 @@ to compare key values. transform will be applied to each element in the partitio
 			   :total-instances-count total)))
 
 (defun cross-validation-objects (n &key (verbose-level 0) (sampling-rate 1) seed)
-  (mapcar (lambda (k) 
-	    (proof-all :verbose-level verbose-level
-		       :sampling-rate sampling-rate
-		       :seed seed
-		       :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
-		       :testing-partition-p (lambda (x) (= x k)) 
-		       :discount-most-recent nil)) 
-	  (range 0 (1- n))))
+  (apply #'avg-classifier-stats (mapcar (lambda (k) 
+		 (proof-all :verbose-level verbose-level
+			    :sampling-rate sampling-rate
+			    :seed seed
+			    :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
+			    :testing-partition-p (lambda (x) (= x k)) 
+			    :discount-most-recent nil)) 
+	       (range 0 (1- n)))))
 
-(defun cross-validation-feature (n feature-fn &key (verbose-level 0) (sampling-rate 1) seed)
-  (mappend (lambda (k) 
-	     (proof-all-feature feature-fn
-				:verbose-level verbose-level
-				:sampling-rate sampling-rate
-				:seed seed
-				:training-style :subjects
-				:partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
-				:testing-partition-p (lambda (x) (= x k)) 
-				:discount-most-recent nil)) 
-	   (range 0 (1- n))))
+
+
+(defun cross-validation-feature (n feature-fn &key (training-style :subjects) (verbose-level 0) (sampling-rate 1) stats-for seed)
+  (apply #'avg-classifier-stats (remove-if-not
+				 ; a bit of a hack. Pass in CYAN as stats-for to filter
+				 (if stats-for
+				     (lambda (cs)
+				       (equal (classifier-stats-id cs)
+					      stats-for))
+				     (lambda (cs) (declare (ignore cs)) t))
+				    (mappend (lambda (k) 
+					    (proof-all-feature feature-fn
+							       :verbose-level verbose-level
+							       :sampling-rate sampling-rate
+							       :seed seed
+							       :training-style training-style
+							       :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
+							       :testing-partition-p (lambda (x) (= x k)) 
+							       :discount-most-recent nil)) 
+					  (range 0 (1- n))))))
 
 (defun proof-all-feature (feature-fn
 			  &key (training-style :inner-nps) (discount-most-recent t) (verbose-level 0) (sampling-rate 1) seed partition-fn testing-partition-p)
@@ -1103,17 +1132,18 @@ to compare key values. transform will be applied to each element in the partitio
       retval)))
 
 
-(defun learning-curves-feature (feature-fn &key (training-style :inner-nps) 
-				(discount-most-recent t)
+(defun learning-curves-feature (feature-fn &key (training-style :subjects) 
+				(folds 10)
 				(seed 1) 
 				(verbose-level 0)
 				(resolution 20))
+  
   (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution))))
 	 (proof-results (mapcar (lambda (p)
-				  (proof-all-feature
+				  (cross-validation-feature 
+				   folds
 				   feature-fn
 				   :training-style training-style
-				   :discount-most-recent discount-most-recent
 				   :verbose-level verbose-level
 				   :sampling-rate p
 				   :seed seed))
@@ -1132,17 +1162,17 @@ to compare key values. transform will be applied to each element in the partitio
 					      results-list))))
 			      results-per-class)))
     (series-graph series-list
-		  :title (format nil "~A ~A ~A t=~A" feature-fn training-style discount-most-recent  *ht-min-threshold*)
+		  :title (format nil "~A ~A t=~A" feature-fn training-style  *ht-min-threshold*)
 		  :x-label "Avg Vocabulary Size / Classifier"
 		  :y-label "Accuracy")))
 
-(defun learning-curves (&key (discount-most-recent t) (verbose-level 0) (seed 1) (resolution 20))
+(defun learning-curves (&key (folds 10) (verbose-level 0) (seed 1) (resolution 20))
   (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution)))) 
 	 (proof-results (mapcar (lambda (p)
-				  (proof-all :discount-most-recent discount-most-recent
-					     :sampling-rate p
-					     :verbose-level verbose-level
-					     :seed seed))
+				  (cross-validation-objects folds
+							    :sampling-rate p
+							    :verbose-level verbose-level
+							    :seed seed))
 				sampling-rates)))
     (series-graph 
      (list (make-series
@@ -1153,7 +1183,7 @@ to compare key values. transform will be applied to each element in the partitio
 				(classifier-stats-total-instances-count class)
 				1)))
 		       proof-results)))
-     :title (format nil "Object RLC ~A t=~a" discount-most-recent *ht-min-threshold*)
+     :title (format nil "Object RLC t=~a" *ht-min-threshold*)
      :x-label "Avg Vocabulary Size / Classifier"
      :y-label "Accuracy")))
 
