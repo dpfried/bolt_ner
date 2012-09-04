@@ -882,18 +882,22 @@ to compare key values. transform will be applied to each element in the partitio
 	   (sequence-total-count 0))
 					; Go through all scenes, running accuracy figures on each
       (dolist (scene (range 0 (1- num-scenes)))
-	(let* ((responses (mappend #'scene-responses (read-scenes-sequence sequence 
+	(let* ((all-scene-responses (mappend #'scene-responses (read-scenes-sequence sequence 
 						 :num-to-read (1+ scene))))
-	       (partitioned-responses (partition-set responses
-				       :key partition-fn))
+	       ; to avoid repeated testing, only load the responses from this scene for testing
+	       (this-scene-responses (scene-responses (read-scene sequence scene)))
+	       (all-partitioned-responses (partition-set all-scene-responses
+							 :key partition-fn))
+	       (this-partitioned-responses (partition-set this-scene-responses
+							  :key partition-fn))
 	       (all-training-responses (mappend #'partition-values
 						(remove-if (compose testing-partition-p
 									#'partition-key)
-							       partitioned-responses)))
+							       all-partitioned-responses)))
 	       (testing-responses (mappend #'partition-values
 					   (remove-if-not (compose testing-partition-p
 							       #'partition-key)
-						      partitioned-responses)))
+						      this-partitioned-responses)))
 	       (sampled-training-responses (sample all-training-responses
 						   sampling-rate
 						   :seed seed))
@@ -984,17 +988,22 @@ to compare key values. transform will be applied to each element in the partitio
 			   :sampling-rate sampling-rate
 			   :total-instances-count total)))
 
-(defun cross-validation-objects (n)
+(defun cross-validation-objects (n &key (verbose-level 0) (sampling-rate 1) seed)
   (mapcar (lambda (k) 
-	    (proof-all 
-	     :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
-	     :testing-partition-p (lambda (x) (= x k)) 
-	     :discount-most-recent nil)) 
+	    (proof-all :verbose-level verbose-level
+		       :sampling-rate sampling-rate
+		       :seed seed
+		       :partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
+		       :testing-partition-p (lambda (x) (= x k)) 
+		       :discount-most-recent nil)) 
 	  (range 0 (1- n))))
 
-(defun cross-validation-feature (n feature-fn)
+(defun cross-validation-feature (n feature-fn &key (verbose-level 0) (sampling-rate 1) seed)
   (mappend (lambda (k) 
 	     (proof-all-feature feature-fn
+				:verbose-level verbose-level
+				:sampling-rate sampling-rate
+				:seed seed
 				:training-style :subjects
 				:partition-fn (compose (lambda (x) (mod x n)) #'response-id) 
 				:testing-partition-p (lambda (x) (= x k)) 
