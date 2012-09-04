@@ -1134,7 +1134,7 @@ to compare key values. transform will be applied to each element in the partitio
 
 (defun learning-curves-feature (feature-fn &key (training-style :subjects) 
 				(folds 10)
-				(seed 1) 
+				seed
 				(verbose-level 0)
 				(resolution 20))
   
@@ -1147,26 +1147,20 @@ to compare key values. transform will be applied to each element in the partitio
 				   :verbose-level verbose-level
 				   :sampling-rate p
 				   :seed seed))
-				sampling-rates))
-	 (results-per-class (partition-set (apply #'append proof-results)
-					   :key #'classifier-stats-id))
-	 (series-list (mapcar (lambda (partition) 
-				(let ((results-list (sort (partition-values partition) #'< :key #'classifier-stats-sampling-rate)))
-				  (make-series
-				   :x (mapcar #'classifier-stats-avg-vocabulary-size results-list)
-				   :y (mapcar (lambda (stats)
-						(/ (classifier-stats-recognized-instances-count stats)
-						   (if (> (classifier-stats-total-instances-count stats) 0)
-						       (classifier-stats-total-instances-count stats)
-						       1)))
-					      results-list))))
-			      results-per-class)))
-    (series-graph series-list
+				sampling-rates)))
+    (series-graph (list (make-series
+		    :x (mapcar #'classifier-stats-avg-vocabulary-size proof-results)
+		    :y (mapcar (lambda (stats)
+				 (/ (classifier-stats-recognized-instances-count stats)
+				    (if (> (classifier-stats-total-instances-count stats) 0)
+					(classifier-stats-total-instances-count stats)
+					1)))
+			       proof-results)))
 		  :title (format nil "~A ~A t=~A" feature-fn training-style  *ht-min-threshold*)
 		  :x-label "Avg Vocabulary Size / Classifier"
 		  :y-label "Accuracy")))
 
-(defun learning-curves (&key (folds 10) (verbose-level 0) (seed 1) (resolution 20))
+(defun learning-curves (&key (folds 10) (verbose-level 0) seed (resolution 20))
   (let* ((sampling-rates (cdr (range 0 1 (/ 1 resolution)))) 
 	 (proof-results (mapcar (lambda (p)
 				  (cross-validation-objects folds
