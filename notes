@@ -1,5 +1,34 @@
+Incremental introduction of objects, that we already had physical information about.
+
 Average of 29 responses per scene.
 
-Widely varying quality (show examples)
+Widely varying quality of responses (show examples)
 
+Two different approaches:
+    build classifiers for objects, within a scene, based on knowledge of which object is new
 
+    build classifiers for features (shape and color), based on knowledge of the objects' features
+
+Bag of words classification using NBCs, maximum a posteriori, and add-one
+smoothing.
+
+Noun-phrase-in-subject isolation as a substitute for semiotics. Using TRIPS and
+parse tree pruning
+
+Building a goldstandard for proofing (not used to train classifier in any way).
+
+Results on object classification. Present k-fold cross validation overall (87%
+accuracy), and with learning curves.
+
+Results on feature classification. Present k-fold cross validation overall (86%
+for color, 90% for shape), and with learning curves.
+
+When a larger training set is available (e.g. when training features, not
+objects), have had good results even with more inclusive feature extraction.
+All innermost noun phrases, and even all words (not using the parse tree at
+all). Show these results.
+
+Possible reasons for color confusion: different monitor temperatures. Cyan had
+lowest accuracy, and we know humans have trouble telling cyan and blue apart.
+
+Future directions

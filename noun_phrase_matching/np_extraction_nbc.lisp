@@ -194,6 +194,15 @@
     (/ (sum lst :val-fn val-fn :weight-fn weight-fn)
        (length lst))))
 
+(defun sample (lst sampling-rate &key seed)
+  (let ((rs (if seed 
+		(seed-random-state seed)
+		*random-state*)))
+  (remove-if (lambda (e)
+	       (declare (ignore e))
+	       (> (random 1.0 rs) sampling-rate))
+	     lst)))
+
 (defun lookup (alist key)
   (cdr (assoc key alist)))
 
@@ -1181,15 +1190,6 @@ to compare key values. transform will be applied to each element in the partitio
      :x-label "Avg Vocabulary Size / Classifier"
      :y-label "Accuracy")))
 
-(defun sample (lst sampling-rate &key seed)
-  (let ((rs (if seed 
-		(seed-random-state seed)
-		*random-state*)))
-  (remove-if (lambda (e)
-	       (declare (ignore e))
-	       (> (random 1.0 rs) sampling-rate))
-	     lst)))
-	      
 ;;;; for graphing with cl-plplot
 
 (defstruct series
