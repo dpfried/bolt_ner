@@ -146,10 +146,7 @@
 		(declare (ignore depth))
 		(format stream "#S(RESPONSE :ID ~s :WORD-LIST ~s)"
 			(response-id struct)
-			(response-word-list struct)
-			(response-string struct)
-			(response-parse struct)))))
-  
+			(response-word-list struct)))))
   scene
   word-list
   id
@@ -616,41 +613,6 @@ to compare key values. transform will be applied to each element in the partitio
   ; the list this returns is not the same length as response-list. Is this a problem?
   (remove-if #'null (mapcar parse-tree-winnowing-fn
 			    (response-list-parse-forest response-list))))
-
-(defun train-classes-by-feature1 (scene-list &key
-				 feature-fn
-				 winnowing-fn
-				 (ht-skimming-fn #'(lambda (ht) 
-						     (skim-ht-threshold ht *ht-min-threshold*))))
-  (labels ((count-feature-instances (partition)
-	     (reduce #'+ (mapcar #'length (partition-values partition))))
-	   (features-cross-scenes (scene)
-	     (mapcar (lambda (feature)
-		       (cons feature scene))
-		     (ensure-list (funcall feature-fn scene)))))
-    (let* ((scene-feature-list (mappend #'features-cross-scenes scene-list))
-	   (partitions (partition-set scene-feature-list
-				      :key (lambda (feature-scene-pair)
-					     (car feature-scene-pair))
-				      :transform (lambda (feature-scene-pair)
-						   (winnow-scene (cdr feature-scene-pair)
-								 winnowing-fn))))
-	   (total-instance-count (reduce #'+ (mapcar #'count-feature-instances partitions))))
-      (mapcar (lambda (partition)
-					; partition key : the feature 
-					; partition value : lists of feature bags from parse-tree-winnowing-fn, 
-					; one for each scene
-		(nbc-class-from-feature-bag
-		 (mapcan (lambda (feature-list) 
-			   (apply #'append feature-list)) 
-			 (partition-values partition))
-		 :label (partition-key partition)
-		 :prior (if (> total-instance-count 0) 
-			    (/ (count-feature-instances partition)
-			       total-instance-count)
-			    1)
-		 :ht-skimming-fn ht-skimming-fn))
-	      partitions))))
 
 (defun train-classes-by-feature (response-list &key feature-fn winnowing-fn
 				 (ht-skimming-fn #'(lambda (ht)
