@@ -1,0 +1,62 @@
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\title{Bootstrapped Noun Phrase Resolution with Naive Bayes Classifiers}
+
+\begin{document}
+\maketitle
+
+\section{Experiment Setup}
+\subsection{Scenes}
+\begin{itemize}
+\item Incremental introduction of objects 
+\item Generated scene from a schematic, with information about color, shape, location, and size of objects.
+\end{itemize}
+
+\subsection{Resposnes}
+\begin{itemize}
+\item Average of 29 responses per scene.
+
+\item Widely varying quality of responses (show examples)
+\end{itemize}
+
+\section{Building Classifiers}
+\begin{itemize}
+\item Bag of words classification using NBCs, maximum a posteriori, and add-one smoothing.
+
+\item Two different approaches:
+\subsection{Classifying Distinct Objects}
+\begin{itemize}
+    \item Building classifiers for objects, within a scene, based on knowledge of which object is new
+    \item Noun-phrase-in-subject isolation as a substitute for semiotics. Using TRIPS and parse tree pruning
+\end{itemize}
+\subsection{Classifying Features}
+\begin{itemize}
+    \item Building classifiers for features (shape and color), based on knowledge of the objects' features
+    \item Can train on all scenes, not just scenes with a given sequence
+\end{itemize}
+\end{itemize}
+
+\section{Evaluation}
+\begin{itemize}
+\item Building a goldstandard for proofing (not used to train classifier in any way).
+
+\item Results on object classification. Present k-fold cross validation overall (87\%
+object recognition accuracy), and with learning curves.
+
+\item Results on feature classification. Present k-fold cross validation overall (86\%
+for color, 90\% for shape), and with learning curves.
+
+\item When a larger training set is available (e.g. when training features, not
+objects), have had good results even with more inclusive feature extraction.
+Training on all innermost noun phrases (79\% for color, 87\% for shape), and even all words, not using the parse tree at
+all (81\% color, 86\% for shape). These are k-fold cross validation scores, separating training from test data.
+
+\item In all iterations, higher accuracy on shape recognition than color
+recognition. Possibly because there were fewer shape classes (3 shape classes,
+5 color classes), or that it's more difficult for humans to tell colors apart.
+(Cyan had the lowest recognition accuracy, confusion with blue?)
+\end{itemize} 
+
+\section{Future directions}
+
+\end{document}

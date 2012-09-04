@@ -3,3 +3,7 @@
 *.pyc
 \#*#
 .#*
+*.pdf
+*.aux
+*.out
+*.log
